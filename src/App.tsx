@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
+import DebtModule from "./DebtModule";
 
 // ═══ SUPABASE ═══
 const SUPA_URL = "https://mhbeicelkyezgyvjnlkd.supabase.co";
@@ -417,7 +418,7 @@ const Bdg = ({c,bg,bd,ch}) => <span style={{background:bg,border:`1px solid ${bd
 const TH = ({ch}) => <th style={{padding:"8px 10px",textAlign:"left",fontSize:9,fontWeight:700,color:C.mu,letterSpacing:"0.5px",textTransform:"uppercase",whiteSpace:"nowrap",background:C.lt,borderBottom:`1px solid ${C.bdr}`}}>{ch}</th>;
 const TD = ({ch,s={}}) => <td style={{padding:"8px 10px",fontSize:12,borderBottom:"1px solid #f1f5f9",...s}}>{ch}</td>;
 
-const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"}];
+const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"},{k:"debts",l:"💳 Задолженности"}];
 const REP_TABS = [{k:"erep",l:"👤 По сотруднику"},{k:"srep",l:"🏪 По магазину"},{k:"pay",l:"💰 По зарплате"}];
 const REF_TABS = [{k:"emp",l:"👥 Сотрудники"},{k:"stores",l:"🏬 Магазины"},{k:"pos",l:"📋 Должности"}];
 
@@ -499,18 +500,24 @@ export default function App() {
   const [ns, setNs] = useState({name:"",address:"",open:"08:00",close:"22:00"});
   const [delStM, setDelStM] = useState(null);
 
+  // ── ЗАДОЛЖЕННОСТИ ──
+  const [debts, setDebts] = useState([]);
+  const [debtMoves, setDebtMoves] = useState([]);
+
   // ── ЗАГРУЗКА ДАННЫХ ───────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [stRes, posRes, empRes, shRes, revRes, schedRes] = await Promise.all([
+      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes] = await Promise.all([
         sb.from("stores").select("*").order("id"),
         sb.from("positions").select("*").order("id"),
         sb.from("employees").select("*").order("id"),
         sb.from("shifts").select("*").order("date", {ascending:false}),
         sb.from("revenue").select("*"),
         sb.from("schedule").select("*"),
+        sb.from("debts").select("*").order("id"),
+        sb.from("debt_moves").select("*").order("date", {ascending:false}),
       ]);
       const sts = stRes.data || [];
       const poss = posRes.data || [];
@@ -541,6 +548,8 @@ export default function App() {
         schedMap[s.store_id][s.month].push({pos_id:s.pos_id, count:s.count});
       });
       setSchedule(schedMap);
+      setDebts(debtRes.data || []);
+      setDebtMoves(dmRes.data || []);
     } catch(e) {
       setError("Ошибка загрузки: " + e.message);
     }
@@ -1462,6 +1471,7 @@ export default function App() {
     if (role === "owner" || role === "manager") return true;
     if (t.k === "input")   return true;
     if (t.k === "reports") return true;
+    if (t.k === "debts")   return true;
     return false;
   });
 
@@ -1519,6 +1529,7 @@ export default function App() {
       {refTab==="stores"&&renderStores()}
       {refTab==="pos"&&renderPos()}
     </div>)}
+    {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
   </div>
 
   {/* МОДАЛ ДОБАВИТЬ НА СМЕНУ */}
