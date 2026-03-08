@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import DebtModule from "./DebtModule";
+import SuppliersModule from "./SuppliersModule";
 
 // ═══ SUPABASE ═══
 const SUPA_URL = "https://mhbeicelkyezgyvjnlkd.supabase.co";
@@ -418,7 +419,7 @@ const Bdg = ({c,bg,bd,ch}) => <span style={{background:bg,border:`1px solid ${bd
 const TH = ({ch}) => <th style={{padding:"8px 10px",textAlign:"left",fontSize:9,fontWeight:700,color:C.mu,letterSpacing:"0.5px",textTransform:"uppercase",whiteSpace:"nowrap",background:C.lt,borderBottom:`1px solid ${C.bdr}`}}>{ch}</th>;
 const TD = ({ch,s={}}) => <td style={{padding:"8px 10px",fontSize:12,borderBottom:"1px solid #f1f5f9",...s}}>{ch}</td>;
 
-const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"},{k:"debts",l:"💳 Задолженности"}];
+const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"},{k:"suppliers",l:"🏭 Поставщики"},{k:"debts",l:"💳 Задолженности"}];
 const REP_TABS = [{k:"erep",l:"👤 По сотруднику"},{k:"srep",l:"🏪 По магазину"},{k:"pay",l:"💰 По зарплате"}];
 const REF_TABS = [{k:"emp",l:"👥 Сотрудники"},{k:"stores",l:"🏬 Магазины"},{k:"pos",l:"📋 Должности"}];
 
@@ -504,12 +505,17 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [debtMoves, setDebtMoves] = useState([]);
 
+  // ── ПОСТАВЩИКИ И ЗАКУПКИ ──
+  const [suppliers, setSuppliers] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [supplierPayments, setSupplierPayments] = useState([]);
+
   // ── ЗАГРУЗКА ДАННЫХ ───────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes] = await Promise.all([
+      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes, supRes, purRes, spRes] = await Promise.all([
         sb.from("stores").select("*").order("id"),
         sb.from("positions").select("*").order("id"),
         sb.from("employees").select("*").order("id"),
@@ -518,6 +524,9 @@ export default function App() {
         sb.from("schedule").select("*"),
         sb.from("debts").select("*").order("id"),
         sb.from("debt_moves").select("*").order("date", {ascending:false}),
+        sb.from("suppliers").select("*").order("name"),
+        sb.from("purchases").select("*").order("date", {ascending:false}),
+        sb.from("supplier_payments").select("*").order("date", {ascending:false}),
       ]);
       const sts = stRes.data || [];
       const poss = posRes.data || [];
@@ -550,6 +559,9 @@ export default function App() {
       setSchedule(schedMap);
       setDebts(debtRes.data || []);
       setDebtMoves(dmRes.data || []);
+      setSuppliers(supRes.data || []);
+      setPurchases(purRes.data || []);
+      setSupplierPayments(spRes.data || []);
     } catch(e) {
       setError("Ошибка загрузки: " + e.message);
     }
@@ -1466,12 +1478,17 @@ export default function App() {
   }
 
   // ── РЕНДЕР ────────────────────────────────────────────────────────────────
+  // Флаги расширенного доступа
+  const canSuppliers = role==="owner" || role==="manager" || appUser?.access_suppliers===true || appUser?.access_finance===true;
+  const canFinance   = role==="owner" || role==="manager" || appUser?.access_finance===true;
+
   // Фильтруем вкладки по роли
   const visibleTabs = TOP_TABS.filter(t => {
     if (role === "owner" || role === "manager") return true;
-    if (t.k === "input")   return true;
-    if (t.k === "reports") return true;
-    if (t.k === "debts")   return appUser?.access_debts === true;
+    if (t.k === "input")     return true;
+    if (t.k === "reports")   return canFinance || role==="admin";
+    if (t.k === "debts")     return appUser?.access_debts === true;
+    if (t.k === "suppliers") return canSuppliers;
     return false;
   });
 
@@ -1530,6 +1547,7 @@ export default function App() {
       {refTab==="pos"&&renderPos()}
     </div>)}
     {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
+    {tab==="suppliers"&&<SuppliersModule sb={sb} stores={stores} suppliers={suppliers} setSuppliers={setSuppliers} purchases={purchases} setPurchases={setPurchases} payments={supplierPayments} setPayments={setSupplierPayments}/>}
   </div>
 
   {/* МОДАЛ ДОБАВИТЬ НА СМЕНУ */}
@@ -1771,7 +1789,7 @@ export default function App() {
       </div>
 
       <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
-        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="Задолж."/><TH ch=""/></tr></thead>
+        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="💳 Долги"/><TH ch="🏭 Закупщик"/><TH ch="💰 Бухгалтер"/><TH ch=""/></tr></thead>
         <tbody>{appUsers.map((u,i)=>{
           const isEdit = editUser?.id===u.id;
           return(<tr key={u.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
@@ -1803,6 +1821,18 @@ export default function App() {
               loadAppUsers();
               if(u.id===appUser?.id) setAppUser({...appUser,access_debts:newVal});
             }}/><span style={{fontSize:10,color:u.access_debts?C.gn:C.mu}}>{u.access_debts?"✓":"—"}</span></label>}/>
+            <TD ch={<label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={u.access_suppliers||false} onChange={async()=>{
+              const newVal=!u.access_suppliers;
+              await sb.from("app_users").update({access_suppliers:newVal}).eq("id",u.id);
+              loadAppUsers();
+              if(u.id===appUser?.id) setAppUser({...appUser,access_suppliers:newVal});
+            }}/><span style={{fontSize:10,color:u.access_suppliers?C.gn:C.mu}}>{u.access_suppliers?"✓":"—"}</span></label>}/>
+            <TD ch={<label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={u.access_finance||false} onChange={async()=>{
+              const newVal=!u.access_finance;
+              await sb.from("app_users").update({access_finance:newVal}).eq("id",u.id);
+              loadAppUsers();
+              if(u.id===appUser?.id) setAppUser({...appUser,access_finance:newVal});
+            }}/><span style={{fontSize:10,color:u.access_finance?C.or:C.mu}}>{u.access_finance?"✓":"—"}</span></label>}/>
             <TD ch={isEdit
               ?<div style={{display:"flex",gap:4}}>
                   <button onClick={()=>{
@@ -1819,19 +1849,34 @@ export default function App() {
       </table>
 
       <div style={{background:C.lt,borderRadius:10,padding:"12px 14px"}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.md,marginBottom:8}}>📋 Права по ролям:</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.md,marginBottom:8}}>📋 Права по ролям и доступам:</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md,marginBottom:8}}>
           <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.or,marginBottom:4}}>👑 Владелец</div>
-            <div>✅ Все магазины</div><div>✅ Справочники</div><div>✅ Все отчёты + зарплаты</div><div>✅ Управление пользователями</div>
+            <div>✅ Все магазины</div><div>✅ Справочники</div><div>✅ Все отчёты + зарплаты</div><div>✅ Управление пользователями</div><div>✅ Поставщики и закупки</div>
           </div>
           <div style={{background:C.blBg,border:`1px solid ${C.blBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.bl,marginBottom:4}}>🏪 Управляющий</div>
-            <div>✅ Все магазины</div><div>✅ Все функции</div><div>✅ Все отчёты и зарплаты</div><div>✅ Справочники</div>
+            <div>✅ Все магазины</div><div>✅ Все функции</div><div>✅ Все отчёты и зарплаты</div><div>✅ Справочники</div><div>✅ Поставщики и закупки</div>
           </div>
           <div style={{background:C.puBg,border:`1px solid ${C.puBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.pu,marginBottom:4}}>📋 Администратор</div>
             <div>✅ Только свой магазин</div><div>✅ Ввод смен</div><div>✅ Отчёт по магазину</div><div>✅ Отчёт по сотруднику</div><div>❌ Зарплаты скрыты</div>
+          </div>
+        </div>
+        <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>🔑 Дополнительные доступы (назначаются к любой роли):</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md}}>
+          <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.rd,marginBottom:4}}>💳 Долги</div>
+            <div>✅ Задолженности сотрудников</div><div>✅ Начисления и удержания</div>
+          </div>
+          <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.gn,marginBottom:4}}>🏭 Закупщик</div>
+            <div>✅ Поставщики</div><div>✅ Закупки и накладные</div><div>✅ Оплаты поставщикам</div>
+          </div>
+          <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.am,marginBottom:4}}>💰 Бухгалтер</div>
+            <div>✅ Поставщики и закупки</div><div>✅ Все отчёты + зарплаты</div>
           </div>
         </div>
       </div>
