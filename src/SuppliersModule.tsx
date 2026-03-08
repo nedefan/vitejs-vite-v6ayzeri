@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 
 const C = {
   bg:"#f8fafc",w:"#fff",bdr:"#e2e8f0",lt:"#f1f5f9",tx:"#0f172a",md:"#475569",mu:"#94a3b8",
@@ -7,151 +7,234 @@ const C = {
   am:"#b45309",amBg:"#fffbeb",amBd:"#fde68a",pu:"#7c3aed",puBg:"#f5f3ff",puBd:"#ddd6fe"
 };
 const I = (ex:any={}) => ({background:C.w,border:`1px solid ${C.bdr}`,color:C.tx,borderRadius:6,padding:"6px 9px",fontSize:12,fontFamily:"inherit",outline:"none",boxSizing:"border-box" as const,width:"100%",...ex});
-const TH = ({ch}:{ch:string}) => <th style={{padding:"8px 10px",textAlign:"left",fontSize:9,fontWeight:700,color:C.mu,letterSpacing:"0.5px",textTransform:"uppercase",whiteSpace:"nowrap",background:C.lt,borderBottom:`1px solid ${C.bdr}`}}>{ch}</th>;
+const TH = ({ch}:{ch:any}) => <th style={{padding:"8px 10px",textAlign:"left",fontSize:9,fontWeight:700,color:C.mu,letterSpacing:"0.5px",textTransform:"uppercase",whiteSpace:"nowrap",background:C.lt,borderBottom:`1px solid ${C.bdr}`}}>{ch}</th>;
 const TD = ({ch,s={}}:{ch:any,s?:any}) => <td style={{padding:"8px 10px",fontSize:12,borderBottom:"1px solid #f1f5f9",...s}}>{ch}</td>;
-const Bdg = ({c,bg,bd,ch}:{c:string,bg:string,bd:string,ch:string}) => <span style={{background:bg,border:`1px solid ${bd}`,color:c,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700}}>{ch}</span>;
-const fmt = (n:number) => Math.round(n).toLocaleString();
-const fmtDate = (d:string) => { try { return new Date(d+"T00:00:00").toLocaleDateString("ru-RU",{day:"numeric",month:"short",year:"numeric"}); } catch(e){ return d; } };
+const Bdg = ({c,bg,bd,ch}:{c:string,bg:string,bd:string,ch:any}) => <span style={{background:bg,border:`1px solid ${bd}`,color:c,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700}}>{ch}</span>;
+const fmt = (n:number) => Math.round(n||0).toLocaleString();
+const fmtDate = (d:string) => { try{return new Date(d+"T00:00:00").toLocaleDateString("ru-RU",{day:"numeric",month:"short"})}catch(e){return d} };
 const todayStr = () => new Date().toISOString().slice(0,10);
+const DAY = ["Вс","Пн","Вт","Ср","Чт","Пт","Сб"];
+const DAYS_FULL = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
 
-const CATEGORIES = ["Молочка","Мясо","Бакалея","Овощи/Фрукты","Напитки","Заморозка","Хлеб","Бытовая химия","Другое"];
-const STATUS_CFG:{[k:string]:{label:string,c:string,bg:string,bd:string}} = {
-  pending:   {label:"Ожидает",   c:C.am,bg:C.amBg,bd:C.amBd},
-  delivered: {label:"Получено",  c:C.bl,bg:C.blBg,bd:C.blBd},
-  paid:      {label:"Оплачено",  c:C.gn,bg:C.gnBg,bd:C.gnBd},
-  overdue:   {label:"Просрочено",c:C.rd,bg:C.rdBg,bd:C.rdBd},
+const STATUS_ORDER:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
+  draft:     {l:"Черновик",  c:C.mu, bg:C.lt,    bd:C.bdr},
+  sent:      {l:"Отправлен", c:C.bl, bg:C.blBg,  bd:C.blBd},
+  delivered: {l:"Доставлен", c:C.gn, bg:C.gnBg,  bd:C.gnBd},
+  cancelled: {l:"Отменён",   c:C.rd, bg:C.rdBg,  bd:C.rdBd},
 };
-const SUP_TABS = [{k:"suppliers",l:"👥 Поставщики"},{k:"purchases",l:"📦 Закупки"},{k:"payments",l:"💳 Оплаты"}];
+const STATUS_DELIV:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
+  pending:     {l:"Ожидается",     c:C.am, bg:C.amBg, bd:C.amBd},
+  received:    {l:"Принято",       c:C.gn, bg:C.gnBg, bd:C.gnBd},
+  discrepancy: {l:"Расхождение",   c:C.rd, bg:C.rdBg, bd:C.rdBd},
+};
 
-interface Supplier { id:number;name:string;category:string;contact:string;phone:string;email:string;inn:string;payment_terms:number;active:boolean; }
-interface Purchase { id:number;date:string;supplier_id:number;store_id:number|null;amount:number;status:string;invoice:string;comment:string; }
-interface Payment  { id:number;date:string;purchase_id:number;supplier_id:number;amount:number;method:string;note:string; }
-interface Props { sb:any;stores:any[];suppliers:Supplier[];setSuppliers:(d:any)=>void;purchases:Purchase[];setPurchases:(d:any)=>void;payments:Payment[];setPayments:(d:any)=>void; }
+interface Props { sb:any; stores:any[]; appUser:any; }
 
-export default function SuppliersModule({sb,stores,suppliers,setSuppliers,purchases,setPurchases,payments,setPayments}:Props) {
-  const [tab,setTab] = useState("suppliers");
-  const [saving,setSaving] = useState(false);
-  const [supModal,setSupModal] = useState<null|"add"|Supplier>(null);
-  const [supF,setSupF] = useState<Partial<Supplier>>({});
-  const [catFilter,setCatFilter] = useState("all");
-  const [showInactive,setShowInactive] = useState(false);
-  const [purModal,setPurModal] = useState<null|"add"|Purchase>(null);
-  const [purF,setPurF] = useState<Partial<Purchase>>({});
-  const [storeFilter,setStoreFilter] = useState("all");
-  const [statusFilter,setStatusFilter] = useState("all");
-  const [payModal,setPayModal] = useState(false);
-  const [payF,setPayF] = useState<Partial<Payment>>({});
+export default function SuppliersModule({sb,stores,appUser}:Props) {
+  // ── data state ──────────────────────────────────────────────────────────
+  const [suppliers,  setSuppliers]  = useState<any[]>([]);
+  const [packages,   setPackages]   = useState<any[]>([]);
+  const [schedules,  setSchedules]  = useState<any[]>([]);
+  const [orders,     setOrders]     = useState<any[]>([]);
+  const [deliveries, setDeliveries] = useState<any[]>([]);
+  const [payments,   setPayments]   = useState<any[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
 
-  const sn = (id:any) => stores.find((s:any)=>s.id===id)?.name||"";
+  // ── ui state ─────────────────────────────────────────────────────────────
+  const [tab, setTab] = useState("schedule");
+  const [selDow, setSelDow] = useState(new Date().getDay()||1);
+  const [refTab, setRefTab] = useState("sup");
 
-  const supSummary = useMemo(()=>suppliers.map(sup=>({
-    ...sup,
-    debt: Math.max(0, purchases.filter(p=>p.supplier_id===sup.id).reduce((s,p)=>s+Number(p.amount),0) - payments.filter(p=>p.supplier_id===sup.id).reduce((s,p)=>s+Number(p.amount),0)),
-  })),[suppliers,purchases,payments]);
+  // ── modals ────────────────────────────────────────────────────────────────
+  const [supModal,   setSupModal]   = useState<null|"add"|any>(null);
+  const [pkgModal,   setPkgModal]   = useState<null|"add"|any>(null);
+  const [schedModal, setSchedModal] = useState<null|"add"|any>(null);
+  const [orderModal, setOrderModal] = useState<null|"add"|any>(null);
+  const [recvModal,  setRecvModal]  = useState<null|any>(null);
+  const [payModal,   setPayModal]   = useState(false);
+  const [delSupM,    setDelSupM]    = useState<null|any>(null);
+  const [delPkgM,    setDelPkgM]    = useState<null|any>(null);
+  const [delOrdM,    setDelOrdM]    = useState<null|any>(null);
+  const [delDelvM,   setDelDelvM]   = useState<null|any>(null);
+  const [delPayM,    setDelPayM]    = useState<null|any>(null);
 
-  const totalDebt   = supSummary.reduce((s,x)=>s+x.debt,0);
-  const totalBought = purchases.reduce((s,p)=>s+Number(p.amount),0);
-  const totalPaid   = payments.reduce((s,p)=>s+Number(p.amount),0);
-  const overdueCount= purchases.filter(p=>p.status==="overdue").length;
+  // ── forms ─────────────────────────────────────────────────────────────────
+  const [supF,   setSupF]   = useState<any>({});
+  const [pkgF,   setPkgF]   = useState<any>({});
+  const [schedF, setSchedF] = useState<any>({order_days:[],delivery_days:[]});
+  const [orderF, setOrderF] = useState<any>({});
+  const [recvF,  setRecvF]  = useState<any>({});
+  const [payF,   setPayF]   = useState<any>({});
 
-  const subTabBtn = (active:boolean) => ({background:active?C.w:"none",border:`1px solid ${active?C.bdr:"transparent"}`,borderRadius:7,cursor:"pointer" as const,padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",color:active?C.or:C.mu,boxShadow:active?"0 1px 3px rgba(0,0,0,.07)":"none"});
+  // ── role ──────────────────────────────────────────────────────────────────
+  const role        = appUser?.role || "admin";
+  const myStoreId   = appUser?.store_id || null;
+  const isOwner     = role==="owner"||role==="manager";
+  const isPurchaser = isOwner||appUser?.access_suppliers||appUser?.access_finance;
+  const isAcct      = isOwner||appUser?.access_finance;
+  const isAdmin     = role==="admin";
 
-  async function saveSupplier() {
-    if(!supF.name?.trim())return; setSaving(true);
-    if(supModal==="add"){const{data}=await sb.from("suppliers").insert({...supF}).select().single();if(data)setSuppliers([...suppliers,data]);}
-    else{const{data}=await sb.from("suppliers").update({...supF}).eq("id",(supF as Supplier).id).select().single();if(data)setSuppliers(suppliers.map((s:Supplier)=>s.id===data.id?data:s));}
-    setSaving(false);setSupModal(null);
-  }
-  async function toggleActive(sup:Supplier){const{data}=await sb.from("suppliers").update({active:!sup.active}).eq("id",sup.id).select().single();if(data)setSuppliers(suppliers.map((s:Supplier)=>s.id===data.id?data:s));}
+  // ── load ──────────────────────────────────────────────────────────────────
+  const loadAll = useCallback(async()=>{
+    setLoading(true);
+    const [s,p,sc,o,d,py] = await Promise.all([
+      sb.from("sup_suppliers").select("*").order("name"),
+      sb.from("sup_packages").select("*").order("name"),
+      sb.from("sup_schedules").select("*"),
+      sb.from("sup_orders").select("*").order("order_date",{ascending:false}),
+      sb.from("sup_deliveries").select("*").order("delivery_date",{ascending:false}),
+      sb.from("sup_payments").select("*").order("date",{ascending:false}),
+    ]);
+    if(s.data) setSuppliers(s.data);
+    if(p.data) setPackages(p.data);
+    if(sc.data) setSchedules(sc.data);
+    if(o.data) setOrders(o.data);
+    if(d.data) setDeliveries(d.data);
+    if(py.data) setPayments(py.data);
+    setLoading(false);
+  },[]);
+  useEffect(()=>{loadAll();},[loadAll]);
 
-  async function savePurchase() {
-    if(!purF.supplier_id||!purF.amount)return; setSaving(true);
-    const payload={...purF,amount:Number(purF.amount),store_id:purF.store_id||null};
-    if(purModal==="add"){const{data}=await sb.from("purchases").insert(payload).select().single();if(data)setPurchases([data,...purchases]);}
-    else{const{data}=await sb.from("purchases").update(payload).eq("id",(purF as Purchase).id).select().single();if(data)setPurchases(purchases.map((p:Purchase)=>p.id===data.id?data:p));}
-    setSaving(false);setPurModal(null);
-  }
+  // ── helpers ───────────────────────────────────────────────────────────────
+  const sn     = (id:any) => stores.find((s:any)=>s.id===id)?.name||"—";
+  const pkgObj = (id:any) => packages.find(p=>p.id===id);
+  const supObj = (id:any) => suppliers.find(s=>s.id===id);
+  const supByPkg = (pkgId:any) => { const p=pkgObj(pkgId); return p?supObj(p.supplier_id):null; };
+  const pkgLabel = (pkgId:any) => { const p=pkgObj(pkgId); return p?`${supByPkg(pkgId)?.name||"?"} › ${p.name}`:"—"; };
 
-  async function savePayment() {
-    if(!payF.supplier_id||!payF.amount)return; setSaving(true);
-    const{data}=await sb.from("supplier_payments").insert({...payF,amount:Number(payF.amount)}).select().single();
-    if(data){
-      setPayments([data,...payments]);
-      if(payF.purchase_id){
-        const pur=purchases.find((p:Purchase)=>p.id===Number(payF.purchase_id));
-        if(pur){
-          const alreadyPaid=payments.filter((p:Payment)=>p.purchase_id===pur.id).reduce((s:number,p:Payment)=>s+Number(p.amount),0);
-          if(alreadyPaid+Number(payF.amount)>=Number(pur.amount)){
-            await sb.from("purchases").update({status:"paid"}).eq("id",pur.id);
-            setPurchases(purchases.map((p:Purchase)=>p.id===pur.id?{...p,status:"paid"}:p));
-          }
-        }
-      }
-    }
-    setSaving(false);setPayModal(false);
-  }
+  // долг по каждому поставщику (только bank deliveries received)
+  const debtBySup = useMemo(()=>{
+    const map:{[id:number]:{total:number,delivs:any[]}} = {};
+    suppliers.forEach(s=>{ map[s.id]={total:0,delivs:[]}; });
+    deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")).forEach(d=>{
+      const p=pkgObj(d.package_id); if(!p)return;
+      if(!map[p.supplier_id]) map[p.supplier_id]={total:0,delivs:[]};
+      map[p.supplier_id].total += Number(d.amount_invoiced);
+      map[p.supplier_id].delivs.push(d);
+    });
+    payments.forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
+    return map;
+  },[suppliers,deliveries,payments,packages]);
 
-  function renderSuppliers(){
-    const filtered=supSummary.filter(s=>(!showInactive&&!s.active?false:true)&&(catFilter==="all"||s.category===catFilter));
+  const totalDebt = Object.values(debtBySup).reduce((s:number,v:any)=>s+Math.max(0,v.total),0);
+  const today = todayStr();
+  const overdueDelivs = deliveries.filter(d=>d.payment_type==="bank"&&d.status==="received"&&d.payment_due_date&&d.payment_due_date<today);
+
+  const subBtn = (a:boolean)=>({background:a?C.w:"none",border:`1px solid ${a?C.bdr:"transparent"}`,borderRadius:7,cursor:"pointer" as const,padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",color:a?C.or:C.mu,boxShadow:a?"0 1px 3px rgba(0,0,0,.07)":"none"});
+  const TABS = [
+    isPurchaser&&{k:"schedule",l:"📅 График"},
+    isPurchaser&&{k:"orders",  l:"📦 Заказы"},
+    {k:"deliveries",l:"🚚 Поставки"},
+    isAcct&&{k:"payments",l:"💰 Оплаты"},
+    isOwner&&{k:"refs",l:"⚙️ Справочник"},
+  ].filter(Boolean) as any[];
+
+  // ════════════════════════════════════════════════════════════════
+  // TAB: ГРАФИК
+  // ════════════════════════════════════════════════════════════════
+  function renderSchedule(){
+    const todayDow = new Date().getDay()||7; // 1=Пн..7=Вс
+    const days = [1,2,3,4,5,6,0];
+    const todayScheds = schedules.filter(sc=>{
+      const pkg=pkgObj(sc.package_id); if(!pkg||!pkg.active) return false;
+      const sup=supObj(pkg.supplier_id); if(!sup||!sup.active) return false;
+      if(!sc.active) return false;
+      const od:number[] = Array.isArray(sc.order_days)?sc.order_days:[];
+      return od.includes(selDow===0?0:selDow);
+    });
     return(<div>
-      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        <button onClick={()=>{setSupF({category:"Молочка",payment_terms:14,active:true});setSupModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Поставщик</button>
-        <select value={catFilter} onChange={e=>setCatFilter(e.target.value)} style={I({width:"auto"})}><option value="all">Все категории</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
-        <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.mu,cursor:"pointer"}}><input type="checkbox" checked={showInactive} onChange={e=>setShowInactive(e.target.checked)}/>Показать неактивных</label>
-        <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>{filtered.length} поставщиков</span>
+      <div style={{display:"flex",gap:4,marginBottom:16,background:C.lt,borderRadius:10,padding:4,display:"inline-flex"}}>
+        {days.map(d=>{
+          const isToday=d===(new Date().getDay());
+          return(<button key={d} onClick={()=>setSelDow(d)} style={{...subBtn(selDow===d),position:"relative",
+            background:selDow===d?(isToday?"linear-gradient(135deg,#f97316,#ea580c)":C.w):"none",
+            color:selDow===d?"#fff":isToday?C.or:C.mu,
+            border:`1px solid ${selDow===d?(isToday?C.or:C.bdr):"transparent"}`}}>
+            {DAY[d]}{isToday&&<span style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:C.or}}/>}
+          </button>);
+        })}
       </div>
-      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:620}}>
-          <thead><tr><TH ch="Поставщик"/><TH ch="Категория"/><TH ch="Контакт"/><TH ch="Отсрочка"/><TH ch="Долг"/><TH ch="Статус"/><TH ch=""/></tr></thead>
-          <tbody>{filtered.map((s,i)=>(
-            <tr key={s.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:s.active?1:0.55}}>
-              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{s.name}</div><div style={{fontSize:10,color:C.mu}}>{s.inn}</div></div>}/>
-              <TD ch={<Bdg c={C.pu} bg={C.puBg} bd={C.puBd} ch={s.category}/>}/>
-              <TD ch={<div><div style={{fontSize:12}}>{s.contact}</div><div style={{fontSize:10,color:C.mu}}>{s.phone}</div></div>}/>
-              <TD ch={<span style={{fontSize:12,color:C.md}}>{s.payment_terms} дн.</span>}/>
-              <TD ch={<span style={{fontWeight:700,fontSize:12,color:s.debt>0?C.rd:C.gn}}>{s.debt>0?fmt(s.debt)+" ₸":"✓ Нет"}</span>}/>
-              <TD ch={<Bdg c={s.active?C.gn:C.mu} bg={s.active?C.gnBg:C.lt} bd={s.active?C.gnBd:C.bdr} ch={s.active?"Активен":"Неактивен"}/>}/>
-              <TD ch={<div style={{display:"flex",gap:4}}>
-                <button onClick={()=>{setSupF({...s});setSupModal(s as Supplier);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
-                <button onClick={()=>toggleActive(s as Supplier)} style={{background:s.active?C.rdBg:C.gnBg,border:`1px solid ${s.active?C.rdBd:C.gnBd}`,color:s.active?C.rd:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{s.active?"Откл":"Вкл"}</button>
-              </div>}/>
-            </tr>
-          ))}</tbody>
-        </table>
+      <div style={{marginBottom:8,fontSize:12,color:C.mu}}>
+        {selDow===new Date().getDay()||selDow===0&&new Date().getDay()===0
+          ?"📍 Сегодня":`📅 ${DAYS_FULL[selDow]}`}
+        {" — "}{todayScheds.length>0?`${todayScheds.length} пакетов к заказу`:"нет заказов по расписанию"}
       </div>
+      {todayScheds.length===0
+        ?<div style={{background:C.lt,borderRadius:12,padding:40,textAlign:"center",color:C.mu}}>
+          <div style={{fontSize:28,marginBottom:8}}>✅</div>
+          <div style={{fontSize:13,fontWeight:600}}>Заказов на этот день нет</div>
+        </div>
+        :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {todayScheds.map(sc=>{
+            const pkg=pkgObj(sc.package_id);
+            const sup=supByPkg(sc.package_id);
+            const delivDays:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
+            const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===today);
+            return(<div key={sc.id} style={{background:C.w,border:`1px solid ${hasOrder?C.gnBd:C.bdr}`,borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13}}>{sup?.name||"?"}<span style={{color:C.mu,fontWeight:400}}> › {pkg?.name||"?"}</span></div>
+                <div style={{fontSize:11,color:C.mu,marginTop:3}}>
+                  🏪 {sn(sc.store_id)} · Доставка: {delivDays.map((d:number)=>DAY[d]).join(", ")||"не указано"}
+                  {pkg?.payment_days>0&&` · Отсрочка ${pkg.payment_days} дн.`}
+                </div>
+              </div>
+              {hasOrder
+                ?<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="✓ Заказ создан"/>
+                :<button onClick={()=>{
+                  setOrderF({package_id:sc.package_id,store_id:sc.store_id,order_date:today,status:"sent",
+                    expected_delivery_date:"",amount_ordered:"",notes:""});
+                  setOrderModal("add");
+                }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  + Создать заказ
+                </button>}
+            </div>);
+          })}
+        </div>
+      }
     </div>);
   }
 
-  function renderPurchases(){
-    const filtered=purchases.filter((p:Purchase)=>{
-      if(storeFilter==="central"&&p.store_id!==null)return false;
-      if(storeFilter!=="all"&&storeFilter!=="central"&&String(p.store_id)!==storeFilter)return false;
-      if(statusFilter!=="all"&&p.status!==statusFilter)return false;
-      return true;
-    });
+  // ════════════════════════════════════════════════════════════════
+  // TAB: ЗАКАЗЫ
+  // ════════════════════════════════════════════════════════════════
+  function renderOrders(){
+    const vis = isAdmin ? orders.filter(o=>o.store_id===myStoreId) : orders;
     return(<div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        <button onClick={()=>{setPurF({date:todayStr(),status:"pending",store_id:null,invoice:"",comment:""});setPurModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Закупка</button>
-        <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} style={I({width:"auto"})}><option value="all">Все магазины</option>{stores.map((s:any)=><option key={s.id} value={String(s.id)}>{s.name}</option>)}<option value="central">Централизованно</option></select>
-        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} style={I({width:"auto"})}><option value="all">Все статусы</option>{Object.entries(STATUS_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
-        <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>Итого: <strong style={{color:C.tx}}>{fmt(filtered.reduce((s,p)=>s+Number(p.amount),0))} ₸</strong></span>
+        <button onClick={()=>{setOrderF({order_date:today,status:"sent",amount_ordered:"",expected_delivery_date:"",notes:"",created_by_role:isAdmin?"admin":"purchaser"});setOrderModal("add");}}
+          style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          + Заказ
+        </button>
+        <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>{vis.length} заказов</span>
       </div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:700}}>
-          <thead><tr><TH ch="Дата"/><TH ch="Поставщик"/><TH ch="Магазин"/><TH ch="Накладная"/><TH ch="Сумма"/><TH ch="Статус"/><TH ch=""/></tr></thead>
-          <tbody>{filtered.map((p:Purchase,i:number)=>{
-            const sup=suppliers.find((s:Supplier)=>s.id===p.supplier_id);
-            const st=STATUS_CFG[p.status]||STATUS_CFG.pending;
-            return(<tr key={p.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
-              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(p.date)}</span>}/>
-              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{sup?.name||"—"}</div><div style={{fontSize:10,color:C.mu}}>{p.comment}</div></div>}/>
-              <TD ch={<span style={{fontSize:11,color:C.md}}>{p.store_id?sn(p.store_id):<span style={{color:C.mu,fontStyle:"italic"}}>Центр</span>}</span>}/>
-              <TD ch={<span style={{fontFamily:"monospace",fontSize:11,color:C.md}}>{p.invoice||"—"}</span>}/>
-              <TD ch={<strong style={{fontSize:12}}>{fmt(Number(p.amount))} ₸</strong>}/>
-              <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.label}/>}/>
+          <thead><tr><TH ch="Дата"/><TH ch="Поставщик › Пакет"/><TH ch="Магазин"/><TH ch="Сумма заказа"/><TH ch="Ожид. поставка"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+          <tbody>{vis.map((o:any,i:number)=>{
+            const st=STATUS_ORDER[o.status]||STATUS_ORDER.sent;
+            return(<tr key={o.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(o.order_date)}</span>}/>
+              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{pkgLabel(o.package_id)}</div>{o.notes&&<div style={{fontSize:10,color:C.mu}}>{o.notes}</div>}</div>}/>
+              <TD ch={<span style={{fontSize:11,color:C.md}}>{o.store_id?sn(o.store_id):<span style={{color:C.mu,fontStyle:"italic"}}>Все</span>}</span>}/>
+              <TD ch={<strong style={{fontSize:12}}>{o.amount_ordered?fmt(o.amount_ordered)+" ₸":"—"}</strong>}/>
+              <TD ch={<span style={{fontSize:11,color:C.md}}>{o.expected_delivery_date?fmtDate(o.expected_delivery_date):"—"}</span>}/>
+              <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
               <TD ch={<div style={{display:"flex",gap:4}}>
-                <button onClick={()=>{setPurF({...p});setPurModal(p);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
-                {p.status!=="paid"&&<button onClick={()=>{setPayF({date:todayStr(),method:"bank",purchase_id:p.id,supplier_id:p.supplier_id,amount:p.amount,note:`Оплата по ${p.invoice||"накладной"}`});setPayModal(true);}} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>💳</button>}
+                <button onClick={()=>{setOrderF({...o});setOrderModal(o);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+                {o.status==="sent"&&<button onClick={()=>{
+                  const pkg=pkgObj(o.package_id);
+                  const daysToAdd=pkg?.payment_days||0;
+                  const due=new Date(); due.setDate(due.getDate()+daysToAdd);
+                  setRecvF({order_id:o.id,package_id:o.package_id,store_id:o.store_id,delivery_date:today,
+                    invoice_number:"",amount_invoiced:o.amount_ordered||"",
+                    payment_due_date:due.toISOString().slice(0,10),
+                    payment_type:pkg?.payment_type||"bank",status:"received",notes:""});
+                  setRecvModal(o);
+                }} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                  🚚 Принять
+                </button>}
+                <button onClick={()=>setDelOrdM(o)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
               </div>}/>
             </tr>);
           })}</tbody>
@@ -160,34 +243,54 @@ export default function SuppliersModule({sb,stores,suppliers,setSuppliers,purcha
     </div>);
   }
 
-  function renderPayments(){
-    const debtors=supSummary.filter(s=>s.debt>0);
+  // ════════════════════════════════════════════════════════════════
+  // TAB: ПОСТАВКИ
+  // ════════════════════════════════════════════════════════════════
+  function renderDeliveries(){
+    const vis = isAdmin ? deliveries.filter(d=>d.store_id===myStoreId) : deliveries;
+    const bank = vis.filter(d=>d.payment_type==="bank");
+    const cash = vis.filter(d=>d.payment_type==="cash");
     return(<div>
-      <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
-        <button onClick={()=>{setPayF({date:todayStr(),method:"bank"});setPayModal(true);}} style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Оплата</button>
-        <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>Оплачено всего: <strong style={{color:C.gn}}>{fmt(totalPaid)} ₸</strong></span>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <button onClick={()=>{setRecvF({delivery_date:today,status:"received",payment_type:"bank",payment_due_date:"",invoice_number:"",amount_invoiced:"",notes:""});setRecvModal("new");}}
+          style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          + Поставка
+        </button>
       </div>
-      {debtors.length>0&&<div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-        {debtors.map(s=><div key={s.id} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:10,padding:"9px 14px",flex:"1 1 180px"}}>
-          <div style={{fontSize:11,fontWeight:600,color:C.tx,marginBottom:2}}>{s.name}</div>
-          <div style={{fontSize:17,fontWeight:800,color:C.rd}}>{fmt(s.debt)} ₸</div>
-          <div style={{fontSize:10,color:C.mu,marginTop:2}}>Отсрочка: {s.payment_terms} дн.</div>
-        </div>)}
-      </div>}
-      {debtors.length===0&&payments.length>0&&<div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:10,padding:"10px 14px",fontSize:12,color:C.gn,fontWeight:600,marginBottom:14}}>✅ Долгов перед поставщиками нет</div>}
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto",marginBottom:16}}>
+        <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>🏦 Безналичные поставки</div>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:700}}>
+          <thead><tr><TH ch="Дата"/><TH ch="Поставщик › Пакет"/><TH ch="Магазин"/><TH ch="Накладная"/><TH ch="Сумма"/><TH ch="Оплатить до"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+          <tbody>{bank.length===0?<tr><td colSpan={7} style={{padding:24,textAlign:"center",color:C.mu,fontSize:12}}>Нет поставок</td></tr>:bank.map((d:any,i:number)=>{
+            const st=STATUS_DELIV[d.status]||STATUS_DELIV.pending;
+            const isOverdue=d.payment_due_date&&d.payment_due_date<today&&d.status!=="pending";
+            return(<tr key={d.id} style={{background:isOverdue?"#fff5f5":i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(d.delivery_date)}</span>}/>
+              <TD ch={<div style={{fontWeight:600,fontSize:12}}>{pkgLabel(d.package_id)}</div>}/>
+              <TD ch={<span style={{fontSize:11}}>{sn(d.store_id)}</span>}/>
+              <TD ch={<span style={{fontFamily:"monospace",fontSize:11,color:C.md}}>{d.invoice_number||"—"}</span>}/>
+              <TD ch={<strong style={{fontSize:12}}>{fmt(d.amount_invoiced)} ₸</strong>}/>
+              <TD ch={d.payment_due_date?<span style={{fontSize:11,fontWeight:600,color:isOverdue?C.rd:C.md}}>{isOverdue?"⚠️ ":""}{fmtDate(d.payment_due_date)}</span>:<span style={{color:C.mu,fontSize:11}}>—</span>}/>
+              <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
+              <TD ch={<button onClick={()=>setDelDelvM(d)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>}/>
+            </tr>);
+          })}</tbody>
+        </table>
+      </div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:580}}>
-          <thead><tr><TH ch="Дата"/><TH ch="Поставщик"/><TH ch="Накладная"/><TH ch="Способ"/><TH ch="Сумма"/><TH ch="Примечание"/></tr></thead>
-          <tbody>{payments.map((pay:Payment,i:number)=>{
-            const sup=suppliers.find((s:Supplier)=>s.id===pay.supplier_id);
-            const pur=purchases.find((p:Purchase)=>p.id===pay.purchase_id);
-            return(<tr key={pay.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
-              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(pay.date)}</span>}/>
-              <TD ch={<span style={{fontWeight:600,fontSize:12}}>{sup?.name||"—"}</span>}/>
-              <TD ch={<span style={{fontFamily:"monospace",fontSize:11,color:C.md}}>{pur?.invoice||"—"}</span>}/>
-              <TD ch={pay.method==="bank"?<Bdg c={C.bl} bg={C.blBg} bd={C.blBd} ch="🏦 Банк"/>:<Bdg c={C.am} bg={C.amBg} bd={C.amBd} ch="💵 Нал"/>}/>
-              <TD ch={<strong style={{fontSize:12,color:C.gn}}>{fmt(Number(pay.amount))} ₸</strong>}/>
-              <TD ch={<span style={{fontSize:11,color:C.mu}}>{pay.note||"—"}</span>}/>
+        <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>💵 Наличные поставки</div>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+          <thead><tr><TH ch="Дата"/><TH ch="Поставщик › Пакет"/><TH ch="Магазин"/><TH ch="Накладная"/><TH ch="Сумма"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+          <tbody>{cash.length===0?<tr><td colSpan={6} style={{padding:24,textAlign:"center",color:C.mu,fontSize:12}}>Нет поставок</td></tr>:cash.map((d:any,i:number)=>{
+            const st=STATUS_DELIV[d.status]||STATUS_DELIV.pending;
+            return(<tr key={d.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(d.delivery_date)}</span>}/>
+              <TD ch={<div style={{fontWeight:600,fontSize:12}}>{pkgLabel(d.package_id)}</div>}/>
+              <TD ch={<span style={{fontSize:11}}>{sn(d.store_id)}</span>}/>
+              <TD ch={<span style={{fontFamily:"monospace",fontSize:11,color:C.md}}>{d.invoice_number||"—"}</span>}/>
+              <TD ch={<strong style={{fontSize:12}}>{fmt(d.amount_invoiced)} ₸</strong>}/>
+              <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
+              <TD ch={<button onClick={()=>setDelDelvM(d)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>}/>
             </tr>);
           })}</tbody>
         </table>
@@ -195,83 +298,591 @@ export default function SuppliersModule({sb,stores,suppliers,setSuppliers,purcha
     </div>);
   }
 
+  // ════════════════════════════════════════════════════════════════
+  // TAB: ОПЛАТЫ (бухгалтер)
+  // ════════════════════════════════════════════════════════════════
+  function renderPayments(){
+    const week = new Date(); week.setDate(week.getDate()+7);
+    const weekStr = week.toISOString().slice(0,10);
+    const overdue = deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date<today);
+    const dueWeek = deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr);
+    const upcoming= deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&(!d.payment_due_date||d.payment_due_date>weekStr));
+    return(<div>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <button onClick={()=>{setPayF({date:today,amount:"",note:""});setPayModal(true);}}
+          style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          + Оплата поставщику
+        </button>
+        <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>
+          Общий долг: <strong style={{color:totalDebt>0?C.rd:C.gn}}>{fmt(totalDebt)} ₸</strong>
+        </span>
+      </div>
+
+      {/* Три колонки дашборда */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
+        <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.rd,marginBottom:6}}>⚠️ ПРОСРОЧЕНО</div>
+          {overdue.length===0?<div style={{fontSize:11,color:C.mu}}>Нет просрочек</div>:overdue.map((d:any)=>(
+            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.rdBd}`}}>
+              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
+              <div style={{fontSize:11,color:C.rd}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
+              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.am,marginBottom:6}}>📅 НА ЭТОЙ НЕДЕЛЕ</div>
+          {dueWeek.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:dueWeek.map((d:any)=>(
+            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.amBd}`}}>
+              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
+              <div style={{fontSize:11,color:C.am}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
+              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>📆 ПРЕДСТОЯЩИЕ</div>
+          {upcoming.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:upcoming.slice(0,5).map((d:any)=>(
+            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.bdr}`}}>
+              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
+              <div style={{fontSize:11,color:C.md}}>{fmt(d.amount_invoiced)} ₸{d.payment_due_date&&` · до ${fmtDate(d.payment_due_date)}`}</div>
+              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Таблица долга по поставщикам */}
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
+        <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>Долги по поставщикам</div>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr><TH ch="Поставщик"/><TH ch="Общий долг"/><TH ch="Поставок не оплачено"/><TH ch=""/></tr></thead>
+          <tbody>{suppliers.map((s:any,i:number)=>{
+            const d=debtBySup[s.id]||{total:0,delivs:[]};
+            const debt=Math.max(0,d.total);
+            if(debt===0&&d.delivs.length===0) return null;
+            return(<tr key={s.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontWeight:600,fontSize:12}}>{s.name}</span>}/>
+              <TD ch={<span style={{fontWeight:700,fontSize:13,color:debt>0?C.rd:C.gn}}>{fmt(debt)} ₸</span>}/>
+              <TD ch={<span style={{fontSize:11,color:C.md}}>{d.delivs.length} накладных</span>}/>
+              <TD ch={debt>0&&<button onClick={()=>{setPayF({date:today,supplier_id:s.id,amount:debt,note:`Оплата ${s.name}`});setPayModal(true);}} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"4px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>💳 Оплатить</button>}/>
+            </tr>);
+          }).filter(Boolean)}</tbody>
+        </table>
+      </div>
+
+      {/* История оплат */}
+      {payments.length>0&&<div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto",marginTop:16}}>
+        <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>История оплат</div>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:500}}>
+          <thead><tr><TH ch="Дата"/><TH ch="Поставщик"/><TH ch="Сумма"/><TH ch="Примечание"/><TH ch=""/></tr></thead>
+          <tbody>{payments.map((pay:any,i:number)=>(
+            <tr key={pay.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(pay.date)}</span>}/>
+              <TD ch={<span style={{fontWeight:600,fontSize:12}}>{suppliers.find((s:any)=>s.id===pay.supplier_id)?.name||"—"}</span>}/>
+              <TD ch={<strong style={{fontSize:12,color:C.gn}}>{fmt(pay.amount)} ₸</strong>}/>
+              <TD ch={<span style={{fontSize:11,color:C.mu}}>{pay.note||"—"}</span>}/>
+              <TD ch={<button onClick={()=>setDelPayM(pay)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>}/>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>}
+    </div>);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // TAB: СПРАВОЧНИК (owner/manager)
+  // ════════════════════════════════════════════════════════════════
+  function renderRefs(){
+    const REF_TABS=[{k:"sup",l:"🏢 Поставщики"},{k:"pkg",l:"📦 Пакеты"},{k:"sched",l:"📅 Расписание"}];
+    return(<div>
+      <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2,marginBottom:16}}>
+        {REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subBtn(refTab===t.k)}>{t.l}</button>)}
+      </div>
+
+      {refTab==="sup"&&<div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <button onClick={()=>{setSupF({active:true});setSupModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Поставщик</button>
+        </div>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr><TH ch="Поставщик"/><TH ch="Контакт"/><TH ch="Пакетов"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+            <tbody>{suppliers.map((s:any,i:number)=>(
+              <tr key={s.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:s.active?1:0.55}}>
+                <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{s.name}</div>{s.notes&&<div style={{fontSize:10,color:C.mu}}>{s.notes}</div>}</div>}/>
+                <TD ch={<div style={{fontSize:11}}>{s.contact}<br/><span style={{color:C.mu}}>{s.phone}</span></div>}/>
+                <TD ch={<span style={{fontSize:12}}>{packages.filter(p=>p.supplier_id===s.id).length}</span>}/>
+                <TD ch={<Bdg c={s.active?C.gn:C.mu} bg={s.active?C.gnBg:C.lt} bd={s.active?C.gnBd:C.bdr} ch={s.active?"Активен":"Неактивен"}/>}/>
+                <TD ch={<div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>{setSupF({...s});setSupModal(s);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+                  <button onClick={()=>setDelSupM(s)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
+                </div>}/>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>}
+
+      {refTab==="pkg"&&<div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <button onClick={()=>{setPkgF({active:true,payment_type:"bank",payment_days:14});setPkgModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Пакет</button>
+        </div>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+            <thead><tr><TH ch="Поставщик"/><TH ch="Пакет"/><TH ch="Оплата"/><TH ch="Отсрочка"/><TH ch="Условия"/><TH ch=""/></tr></thead>
+            <tbody>{packages.map((p:any,i:number)=>{
+              const sup=supObj(p.supplier_id);
+              return(<tr key={p.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:p.active?1:0.55}}>
+                <TD ch={<span style={{fontSize:11,color:C.md}}>{sup?.name||"—"}</span>}/>
+                <TD ch={<span style={{fontWeight:600,fontSize:12}}>{p.name}</span>}/>
+                <TD ch={p.payment_type==="bank"?<Bdg c={C.bl} bg={C.blBg} bd={C.blBd} ch="🏦 Банк"/>:<Bdg c={C.am} bg={C.amBg} bd={C.amBd} ch="💵 Нал"/>}/>
+                <TD ch={<span style={{fontSize:12}}>{p.payment_type==="bank"?`${p.payment_days} дн.`:"—"}</span>}/>
+                <TD ch={<span style={{fontSize:11,color:C.mu}}>{p.notes||"—"}</span>}/>
+                <TD ch={<div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>{setPkgF({...p});setPkgModal(p);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+                  <button onClick={()=>setDelPkgM(p)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
+                </div>}/>
+              </tr>);
+            })}</tbody>
+          </table>
+        </div>
+      </div>}
+
+      {refTab==="sched"&&<div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <button onClick={()=>{setSchedF({active:true,order_days:[],delivery_days:[],lead_days:1});setSchedModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Расписание</button>
+        </div>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:640}}>
+            <thead><tr><TH ch="Пакет"/><TH ch="Магазин"/><TH ch="Дни заказа"/><TH ch="Дни поставки"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+            <tbody>{schedules.map((sc:any,i:number)=>{
+              const od:number[]=Array.isArray(sc.order_days)?sc.order_days:[];
+              const dd:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
+              return(<tr key={sc.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:sc.active?1:0.55}}>
+                <TD ch={<span style={{fontWeight:600,fontSize:12}}>{pkgLabel(sc.package_id)}</span>}/>
+                <TD ch={<span style={{fontSize:11}}>{sn(sc.store_id)}</span>}/>
+                <TD ch={<span style={{fontSize:11,color:C.bl}}>{od.map((d:number)=>DAY[d]).join(", ")||"—"}</span>}/>
+                <TD ch={<span style={{fontSize:11,color:C.gn}}>{dd.map((d:number)=>DAY[d]).join(", ")||"—"}</span>}/>
+                <TD ch={<Bdg c={sc.active?C.gn:C.mu} bg={sc.active?C.gnBg:C.lt} bd={sc.active?C.gnBd:C.bdr} ch={sc.active?"Активно":"Откл."}/>}/>
+                <TD ch={<button onClick={()=>{setSchedF({...sc,order_days:od,delivery_days:dd});setSchedModal(sc);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>}/>
+              </tr>);
+            })}</tbody>
+          </table>
+        </div>
+      </div>}
+    </div>);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // CRUD FUNCTIONS
+  // ════════════════════════════════════════════════════════════════
+  async function saveSupplier(){
+    if(!supF.name?.trim())return; setSaving(true);
+    if(supModal==="add"){const{data}=await sb.from("sup_suppliers").insert({...supF}).select().single();if(data)setSuppliers([...suppliers,data]);}
+    else{const{data}=await sb.from("sup_suppliers").update({...supF}).eq("id",supF.id).select().single();if(data)setSuppliers(suppliers.map((s:any)=>s.id===data.id?data:s));}
+    setSaving(false);setSupModal(null);
+  }
+  async function savePackage(){
+    if(!pkgF.name?.trim()||!pkgF.supplier_id)return; setSaving(true);
+    if(pkgModal==="add"){const{data}=await sb.from("sup_packages").insert({...pkgF}).select().single();if(data)setPackages([...packages,data]);}
+    else{const{data}=await sb.from("sup_packages").update({...pkgF}).eq("id",pkgF.id).select().single();if(data)setPackages(packages.map((p:any)=>p.id===data.id?data:p));}
+    setSaving(false);setPkgModal(null);
+  }
+  async function deleteSup(sup:any){
+    const hasPkgs = packages.some((p:any)=>p.supplier_id===sup.id);
+    if(hasPkgs){
+      // есть пакеты — просто деактивируем
+      const{data}=await sb.from("sup_suppliers").update({active:false}).eq("id",sup.id).select().single();
+      if(data) setSuppliers(suppliers.map((s:any)=>s.id===data.id?data:s));
+    } else {
+      await sb.from("sup_suppliers").delete().eq("id",sup.id);
+      setSuppliers(suppliers.filter((s:any)=>s.id!==sup.id));
+    }
+    setDelSupM(null);
+  }
+  async function deletePkg(pkg:any){
+    const hasOrders    = orders.some((o:any)=>o.package_id===pkg.id);
+    const hasDeliveries= deliveries.some((d:any)=>d.package_id===pkg.id);
+    if(hasOrders||hasDeliveries){
+      const{data}=await sb.from("sup_packages").update({active:false}).eq("id",pkg.id).select().single();
+      if(data) setPackages(packages.map((p:any)=>p.id===data.id?data:p));
+    } else {
+      await sb.from("sup_schedules").delete().eq("package_id",pkg.id);
+      await sb.from("sup_packages").delete().eq("id",pkg.id);
+      setPackages(packages.filter((p:any)=>p.id!==pkg.id));
+      setSchedules(schedules.filter((s:any)=>s.package_id!==pkg.id));
+    }
+    setDelPkgM(null);
+  }
+  async function deleteOrder(o:any){
+    await sb.from("sup_orders").delete().eq("id",o.id);
+    setOrders(orders.filter((x:any)=>x.id!==o.id));
+    setDelOrdM(null);
+  }
+  async function deleteDelivery(d:any){
+    await sb.from("sup_deliveries").delete().eq("id",d.id);
+    setDeliveries(deliveries.filter((x:any)=>x.id!==d.id));
+    setDelDelvM(null);
+  }
+  async function deletePayment(p:any){
+    await sb.from("sup_payments").delete().eq("id",p.id);
+    setPayments(payments.filter((x:any)=>x.id!==p.id));
+    setDelPayM(null);
+  }
+  async function saveSchedule(){
+    if(!schedF.package_id||!schedF.store_id)return; setSaving(true);
+    const payload={...schedF,order_days:schedF.order_days||[],delivery_days:schedF.delivery_days||[]};
+    if(schedModal==="add"){const{data}=await sb.from("sup_schedules").insert(payload).select().single();if(data)setSchedules([...schedules,data]);}
+    else{const{data}=await sb.from("sup_schedules").update(payload).eq("id",schedF.id).select().single();if(data)setSchedules(schedules.map((s:any)=>s.id===data.id?data:s));}
+    setSaving(false);setSchedModal(null);
+  }
+  async function saveOrder(){
+    if(!orderF.package_id)return; setSaving(true);
+    const payload={...orderF,amount_ordered:Number(orderF.amount_ordered)||0,store_id:orderF.store_id||null};
+    if(orderModal==="add"){const{data}=await sb.from("sup_orders").insert(payload).select().single();if(data)setOrders([data,...orders]);}
+    else{const{data}=await sb.from("sup_orders").update(payload).eq("id",orderF.id).select().single();if(data)setOrders(orders.map((o:any)=>o.id===data.id?data:o));}
+    setSaving(false);setOrderModal(null);
+  }
+  async function saveDelivery(){
+    if(!recvF.package_id||!recvF.store_id)return; setSaving(true);
+    const payload={...recvF,amount_invoiced:Number(recvF.amount_invoiced)||0,order_id:recvF.order_id||null};
+    const{data}=await sb.from("sup_deliveries").insert(payload).select().single();
+    if(data){
+      setDeliveries([data,...deliveries]);
+      if(recvF.order_id){
+        await sb.from("sup_orders").update({status:"delivered"}).eq("id",recvF.order_id);
+        setOrders(orders.map((o:any)=>o.id===recvF.order_id?{...o,status:"delivered"}:o));
+      }
+    }
+    setSaving(false);setRecvModal(null);
+  }
+  async function savePayment(){
+    if(!payF.supplier_id||!payF.amount)return; setSaving(true);
+    const{data}=await sb.from("sup_payments").insert({...payF,amount:Number(payF.amount)}).select().single();
+    if(data) setPayments([data,...payments]);
+    setSaving(false);setPayModal(false);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // DAYS CHECKBOX HELPER
+  // ════════════════════════════════════════════════════════════════
+  function DayPicker({val,onChange}:{val:number[],onChange:(v:number[])=>void}){
+    return(<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+      {[1,2,3,4,5,6,0].map(d=>{
+        const on=val.includes(d);
+        return(<button key={d} type="button" onClick={()=>onChange(on?val.filter(x=>x!==d):[...val,d].sort())}
+          style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+            background:on?"linear-gradient(135deg,#f97316,#ea580c)":C.lt,
+            border:`1px solid ${on?C.or:C.bdr}`,color:on?"#fff":C.md}}>
+          {DAY[d]}
+        </button>);
+      })}
+    </div>);
+  }
+
+  if(loading) return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:60,color:C.mu}}><div style={{textAlign:"center"}}><div style={{fontSize:28,marginBottom:8}}>⏳</div><div>Загрузка...</div></div></div>);
+
+  // ════════════════════════════════════════════════════════════════
+  // RENDER
+  // ════════════════════════════════════════════════════════════════
   return(<div>
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:14}}>
       <div>
         <h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>🏭 Поставщики и закупки</h2>
-        <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>{SUP_TABS.map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={subTabBtn(tab===t.k)}>{t.l}</button>)}</div>
+        <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
+          {TABS.map((t:any)=><button key={t.k} onClick={()=>setTab(t.k)} style={subBtn(tab===t.k)}>{t.l}</button>)}
+        </div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:90}}><div style={{fontSize:16,fontWeight:800,color:C.tx}}>{suppliers.filter((s:Supplier)=>s.active).length}</div><div style={{fontSize:9,color:C.mu,fontWeight:700}}>ПОСТАВЩИКОВ</div></div>
-        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:110}}><div style={{fontSize:16,fontWeight:800,color:C.tx}}>{fmt(totalBought)} ₸</div><div style={{fontSize:9,color:C.mu,fontWeight:700}}>ЗАКУПОК</div></div>
-        <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:110}}><div style={{fontSize:16,fontWeight:800,color:C.gn}}>{fmt(totalPaid)} ₸</div><div style={{fontSize:9,color:C.gn,fontWeight:700}}>ОПЛАЧЕНО</div></div>
-        <div style={{background:totalDebt>0?C.rdBg:C.gnBg,border:`1px solid ${totalDebt>0?C.rdBd:C.gnBd}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:110}}><div style={{fontSize:16,fontWeight:800,color:totalDebt>0?C.rd:C.gn}}>{fmt(totalDebt)} ₸</div><div style={{fontSize:9,color:totalDebt>0?C.rd:C.gn,fontWeight:700}}>ДОЛГ</div></div>
-        {overdueCount>0&&<div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:80}}><div style={{fontSize:16,fontWeight:800,color:C.am}}>{overdueCount}</div><div style={{fontSize:9,color:C.am,fontWeight:700}}>ПРОСРОЧ.</div></div>}
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:90}}>
+          <div style={{fontSize:16,fontWeight:800,color:C.tx}}>{suppliers.filter((s:any)=>s.active).length}</div>
+          <div style={{fontSize:9,color:C.mu,fontWeight:700}}>ПОСТАВЩИКОВ</div>
+        </div>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:90}}>
+          <div style={{fontSize:16,fontWeight:800,color:C.tx}}>{orders.filter((o:any)=>o.status==="sent").length}</div>
+          <div style={{fontSize:9,color:C.mu,fontWeight:700}}>ЗАКАЗОВ</div>
+        </div>
+        <div style={{background:overdueDelivs.length>0?C.rdBg:C.lt,border:`1px solid ${overdueDelivs.length>0?C.rdBd:C.bdr}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:90}}>
+          <div style={{fontSize:16,fontWeight:800,color:overdueDelivs.length>0?C.rd:C.mu}}>{overdueDelivs.length}</div>
+          <div style={{fontSize:9,color:overdueDelivs.length>0?C.rd:C.mu,fontWeight:700}}>ПРОСРОЧЕНО</div>
+        </div>
+        <div style={{background:totalDebt>0?C.amBg:C.gnBg,border:`1px solid ${totalDebt>0?C.amBd:C.gnBd}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:110}}>
+          <div style={{fontSize:16,fontWeight:800,color:totalDebt>0?C.am:C.gn}}>{fmt(totalDebt)} ₸</div>
+          <div style={{fontSize:9,color:totalDebt>0?C.am:C.gn,fontWeight:700}}>ДОЛГ</div>
+        </div>
       </div>
     </div>
 
-    {tab==="suppliers"&&renderSuppliers()}
-    {tab==="purchases"&&renderPurchases()}
-    {tab==="payments"&&renderPayments()}
+    {tab==="schedule"  && renderSchedule()}
+    {tab==="orders"    && renderOrders()}
+    {tab==="deliveries"&& renderDeliveries()}
+    {tab==="payments"  && renderPayments()}
+    {tab==="refs"      && renderRefs()}
 
-    {supModal&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
-      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:440,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",maxHeight:"90vh",overflowY:"auto"}}>
-        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{supModal==="add"?"Новый поставщик":"Редактировать поставщика"}</div>
+    {/* МОДАЛ: ПОСТАВЩИК */}
+    {supModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:420,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{supModal==="add"?"Новый поставщик":"Редактировать"}</div>
         <div style={{display:"flex",flexDirection:"column",gap:9}}>
-          {([["НАИМЕНОВАНИЕ","name"],["ИИН/БИН","inn"],["КОНТАКТНОЕ ЛИЦО","contact"],["ТЕЛЕФОН","phone"],["EMAIL","email"]] as [string,keyof Supplier][]).map(([lbl,key])=>(
-            <div key={key}><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>{lbl}</div><input type="text" value={(supF[key] as string)||""} onChange={e=>setSupF({...supF,[key]:e.target.value})} style={I()}/></div>
+          {([["НАИМЕНОВАНИЕ","name"],["КОНТАКТ","contact"],["ТЕЛЕФОН","phone"],["ИИН/БИН","inn"],["ЗАМЕТКИ","notes"]] as [string,string][]).map(([l,k])=>(
+            <div key={k}><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>{l}</div><input value={supF[k]||""} onChange={e=>setSupF({...supF,[k]:e.target.value})} style={I()}/></div>
           ))}
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>КАТЕГОРИЯ</div><select value={supF.category||""} onChange={e=>setSupF({...supF,category:e.target.value})} style={I()}>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ОТСРОЧКА ПЛАТЕЖА (ДНЕЙ)</div><input type="number" value={supF.payment_terms||""} onChange={e=>setSupF({...supF,payment_terms:+e.target.value})} style={I()}/></div>
+          <div><label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox" checked={supF.active||false} onChange={e=>setSupF({...supF,active:e.target.checked})}/>Активен</label></div>
         </div>
         <div style={{display:"flex",gap:7,marginTop:14}}>
           <button onClick={()=>setSupModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={saveSupplier} disabled={saving||!supF.name?.trim()} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
         </div>
       </div>
-    </div>)}
+    </div>}
 
-    {purModal&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+    {/* МОДАЛ: ПАКЕТ */}
+    {pkgModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:420,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
-        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{purModal==="add"?"Новая закупка":"Редактировать закупку"}</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{pkgModal==="add"?"Новый пакет":"Редактировать пакет"}</div>
         <div style={{display:"flex",flexDirection:"column",gap:9}}>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА</div><input type="date" value={purF.date||""} onChange={e=>setPurF({...purF,date:e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПОСТАВЩИК</div><select value={purF.supplier_id||""} onChange={e=>setPurF({...purF,supplier_id:+e.target.value})} style={I()}><option value="">— Выбрать —</option>{suppliers.filter((s:Supplier)=>s.active).map((s:Supplier)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>МАГАЗИН (или централизованно)</div><select value={purF.store_id||""} onChange={e=>setPurF({...purF,store_id:e.target.value?+e.target.value:null})} style={I()}><option value="">Централизованно</option>{stores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>НОМЕР НАКЛАДНОЙ</div><input type="text" value={purF.invoice||""} onChange={e=>setPurF({...purF,invoice:e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА (₸)</div><input type="number" value={purF.amount||""} onChange={e=>setPurF({...purF,amount:+e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СОСТАВ / КОММЕНТАРИЙ</div><input type="text" value={purF.comment||""} onChange={e=>setPurF({...purF,comment:e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СТАТУС</div><select value={purF.status||"pending"} onChange={e=>setPurF({...purF,status:e.target.value})} style={I()}>{Object.entries(STATUS_CFG).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
-        </div>
-        <div style={{display:"flex",gap:7,marginTop:14}}>
-          <button onClick={()=>setPurModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
-          <button onClick={savePurchase} disabled={saving||!purF.supplier_id||!purF.amount} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
-        </div>
-      </div>
-    </div>)}
-
-    {payModal&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
-      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:400,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
-        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>Регистрация оплаты</div>
-        <div style={{display:"flex",flexDirection:"column",gap:9}}>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА</div><input type="date" value={payF.date||""} onChange={e=>setPayF({...payF,date:e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПОСТАВЩИК</div><select value={payF.supplier_id||""} onChange={e=>setPayF({...payF,supplier_id:+e.target.value,purchase_id:undefined})} style={I()}><option value="">— Выбрать —</option>{suppliers.map((s:Supplier)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ЗАКУПКА (НАКЛАДНАЯ)</div><select value={payF.purchase_id||""} onChange={e=>{const pur=purchases.find((p:Purchase)=>p.id===+e.target.value);setPayF({...payF,purchase_id:+e.target.value,amount:pur?.amount});}} style={I()}><option value="">— Выбрать —</option>{purchases.filter((p:Purchase)=>p.status!=="paid"&&(!payF.supplier_id||p.supplier_id===Number(payF.supplier_id))).map((p:Purchase)=><option key={p.id} value={p.id}>{p.invoice||"б/н"} — {fmt(Number(p.amount))} ₸</option>)}</select></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА ОПЛАТЫ (₸)</div><input type="number" value={payF.amount||""} onChange={e=>setPayF({...payF,amount:+e.target.value})} style={I()}/></div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СПОСОБ ОПЛАТЫ</div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПОСТАВЩИК</div>
+            <select value={pkgF.supplier_id||""} onChange={e=>setPkgF({...pkgF,supplier_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {suppliers.filter((s:any)=>s.active).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>НАЗВАНИЕ ПАКЕТА</div><input value={pkgF.name||""} onChange={e=>setPkgF({...pkgF,name:e.target.value})} placeholder="Эфес, Яшкино..." style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ТИП ОПЛАТЫ</div>
             <div style={{display:"flex",gap:6}}>
-              {([["bank","🏦 Безналичный"],["cash","💵 Наличные"]] as const).map(([val,label])=>(
-                <button key={val} onClick={()=>setPayF({...payF,method:val})} style={{flex:1,padding:"7px",borderRadius:7,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:payF.method===val?(val==="bank"?C.blBg:C.amBg):C.lt,border:`2px solid ${payF.method===val?(val==="bank"?C.blBd:C.amBd):C.bdr}`,color:payF.method===val?(val==="bank"?C.bl:C.am):C.mu}}>{label}</button>
+              {([["bank","🏦 Банк"],["cash","💵 Нал"]] as const).map(([v,l])=>(
+                <button key={v} type="button" onClick={()=>setPkgF({...pkgF,payment_type:v})} style={{flex:1,padding:"7px",borderRadius:7,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:pkgF.payment_type===v?(v==="bank"?C.blBg:C.amBg):C.lt,border:`2px solid ${pkgF.payment_type===v?(v==="bank"?C.blBd:C.amBd):C.bdr}`,color:pkgF.payment_type===v?(v==="bank"?C.bl:C.am):C.mu}}>{l}</button>
               ))}
             </div>
           </div>
-          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПРИМЕЧАНИЕ</div><input type="text" value={payF.note||""} onChange={e=>setPayF({...payF,note:e.target.value})} style={I()}/></div>
+          {pkgF.payment_type==="bank"&&<div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ОТСРОЧКА (ДНЕЙ)</div><input type="number" value={pkgF.payment_days||""} onChange={e=>setPkgF({...pkgF,payment_days:+e.target.value})} style={I()}/></div>}
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>УСЛОВИЯ / ЗАМЕТКИ</div><input value={pkgF.notes||""} onChange={e=>setPkgF({...pkgF,notes:e.target.value})} style={I()}/></div>
+          <div><label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox" checked={pkgF.active||false} onChange={e=>setPkgF({...pkgF,active:e.target.checked})}/>Активен</label></div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setPkgModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={savePackage} disabled={saving||!pkgF.name?.trim()||!pkgF.supplier_id} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* МОДАЛ: РАСПИСАНИЕ */}
+    {schedModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:440,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>Расписание заказов</div>
+        <div style={{display:"flex",flexDirection:"column",gap:9}}>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПАКЕТ</div>
+            <select value={schedF.package_id||""} onChange={e=>setSchedF({...schedF,package_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {packages.filter((p:any)=>p.active).map((p:any)=>{const s=supObj(p.supplier_id);return<option key={p.id} value={p.id}>{s?.name} › {p.name}</option>;})}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>МАГАЗИН</div>
+            <select value={schedF.store_id||""} onChange={e=>setSchedF({...schedF,store_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {stores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДНИ ЗАКАЗА</div><DayPicker val={schedF.order_days||[]} onChange={v=>setSchedF({...schedF,order_days:v})}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДНИ ПОСТАВКИ</div><DayPicker val={schedF.delivery_days||[]} onChange={v=>setSchedF({...schedF,delivery_days:v})}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СРОК ПОСТАВКИ (ДНЕЙ)</div><input type="number" value={schedF.lead_days||""} onChange={e=>setSchedF({...schedF,lead_days:+e.target.value})} style={I({width:80})}/></div>
+          <div><label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox" checked={schedF.active||false} onChange={e=>setSchedF({...schedF,active:e.target.checked})}/>Активно</label></div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setSchedModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={saveSchedule} disabled={saving||!schedF.package_id||!schedF.store_id} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* МОДАЛ: ЗАКАЗ */}
+    {orderModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:420,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{orderModal==="add"?"Новый заказ":"Редактировать заказ"}</div>
+        <div style={{display:"flex",flexDirection:"column",gap:9}}>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПАКЕТ</div>
+            <select value={orderF.package_id||""} onChange={e=>setOrderF({...orderF,package_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {packages.filter((p:any)=>p.active).map((p:any)=>{const s=supObj(p.supplier_id);return<option key={p.id} value={p.id}>{s?.name} › {p.name}</option>;})}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>МАГАЗИН</div>
+            <select value={orderF.store_id||""} onChange={e=>setOrderF({...orderF,store_id:e.target.value?+e.target.value:null})} style={I()}>
+              <option value="">— Все магазины —</option>
+              {(isAdmin?stores.filter((s:any)=>s.id===myStoreId):stores).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА ЗАКАЗА</div><input type="date" value={orderF.order_date||""} onChange={e=>setOrderF({...orderF,order_date:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ОЖИДАЕМАЯ ДАТА ПОСТАВКИ</div><input type="date" value={orderF.expected_delivery_date||""} onChange={e=>setOrderF({...orderF,expected_delivery_date:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА ЗАКАЗА (₸)</div><input type="number" value={orderF.amount_ordered||""} onChange={e=>setOrderF({...orderF,amount_ordered:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СТАТУС</div>
+            <select value={orderF.status||"sent"} onChange={e=>setOrderF({...orderF,status:e.target.value})} style={I()}>
+              {Object.entries(STATUS_ORDER).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ЗАМЕТКИ</div><input value={orderF.notes||""} onChange={e=>setOrderF({...orderF,notes:e.target.value})} style={I()}/></div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setOrderModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={saveOrder} disabled={saving||!orderF.package_id} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* МОДАЛ: ПРИЁМКА */}
+    {recvModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:430,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:4}}>Принять поставку</div>
+        {recvModal!=="new"&&<div style={{fontSize:11,color:C.mu,marginBottom:14}}>Заказ: {pkgLabel(recvModal.package_id)} · {fmtDate(recvModal.order_date)}</div>}
+        <div style={{display:"flex",flexDirection:"column",gap:9,marginTop:recvModal==="new"?14:0}}>
+          {recvModal==="new"&&<>
+            <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПАКЕТ</div>
+              <select value={recvF.package_id||""} onChange={e=>setRecvF({...recvF,package_id:+e.target.value})} style={I()}>
+                <option value="">— Выбрать —</option>
+                {packages.filter((p:any)=>p.active).map((p:any)=>{const s=supObj(p.supplier_id);return<option key={p.id} value={p.id}>{s?.name} › {p.name}</option>;})}
+              </select>
+            </div>
+            <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>МАГАЗИН</div>
+              <select value={recvF.store_id||""} onChange={e=>setRecvF({...recvF,store_id:+e.target.value})} style={I()}>
+                <option value="">— Выбрать —</option>
+                {(isAdmin?stores.filter((s:any)=>s.id===myStoreId):stores).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </>}
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА ПОСТАВКИ</div><input type="date" value={recvF.delivery_date||""} onChange={e=>setRecvF({...recvF,delivery_date:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>НОМЕР НАКЛАДНОЙ</div><input value={recvF.invoice_number||""} onChange={e=>setRecvF({...recvF,invoice_number:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА ПО НАКЛАДНОЙ (₸)</div><input type="number" value={recvF.amount_invoiced||""} onChange={e=>setRecvF({...recvF,amount_invoiced:e.target.value})} style={I()}/></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+            <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ТИП ОПЛАТЫ</div>
+              <select value={recvF.payment_type||"bank"} onChange={e=>setRecvF({...recvF,payment_type:e.target.value})} style={I()}>
+                <option value="bank">🏦 Банк</option><option value="cash">💵 Нал</option>
+              </select>
+            </div>
+            {recvF.payment_type==="bank"&&<div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ОПЛАТИТЬ ДО</div><input type="date" value={recvF.payment_due_date||""} onChange={e=>setRecvF({...recvF,payment_due_date:e.target.value})} style={I()}/></div>}
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СТАТУС</div>
+            <div style={{display:"flex",gap:6}}>
+              {([["received","✅ Принято"],["discrepancy","⚠️ Расхождение"]] as const).map(([v,l])=>(
+                <button key={v} type="button" onClick={()=>setRecvF({...recvF,status:v})} style={{flex:1,padding:"7px",borderRadius:7,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:recvF.status===v?(v==="received"?C.gnBg:C.amBg):C.lt,border:`2px solid ${recvF.status===v?(v==="received"?C.gnBd:C.amBd):C.bdr}`,color:recvF.status===v?(v==="received"?C.gn:C.am):C.mu}}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ЗАМЕТКИ (РАСХОЖДЕНИЕ И ДР.)</div><input value={recvF.notes||""} onChange={e=>setRecvF({...recvF,notes:e.target.value})} style={I()}/></div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setRecvModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={saveDelivery} disabled={saving||!recvF.package_id||!recvF.store_id} style={{flex:1,background:C.gn,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>🚚 Принять</button>
+        </div>
+      </div>
+    </div>}
+
+    {/* МОДАЛ: ОПЛАТА */}
+    {payModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:380,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>Оплата поставщику</div>
+        <div style={{display:"flex",flexDirection:"column",gap:9}}>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПОСТАВЩИК</div>
+            <select value={payF.supplier_id||""} onChange={e=>setPayF({...payF,supplier_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {suppliers.map((s:any)=>{const d=debtBySup[s.id];return<option key={s.id} value={s.id}>{s.name}{d&&d.total>0?` (долг: ${fmt(d.total)} ₸)`:""}</option>;})}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА</div><input type="date" value={payF.date||""} onChange={e=>setPayF({...payF,date:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА (₸)</div><input type="number" value={payF.amount||""} onChange={e=>setPayF({...payF,amount:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПРИМЕЧАНИЕ</div><input value={payF.note||""} onChange={e=>setPayF({...payF,note:e.target.value})} style={I()}/></div>
         </div>
         <div style={{display:"flex",gap:7,marginTop:14}}>
           <button onClick={()=>setPayModal(false)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={savePayment} disabled={saving||!payF.supplier_id||!payF.amount} style={{flex:1,background:C.gn,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>💳 Провести</button>
         </div>
       </div>
-    </div>)}
+    </div>}
+
+  {/* МОДАЛ: УДАЛЕНИЕ ЗАКАЗА */}
+    {delOrdM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить заказ?</div>
+        <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delOrdM.package_id)}</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:14}}>{fmtDate(delOrdM.order_date)} · {delOrdM.amount_ordered?fmt(delOrdM.amount_ordered)+" ₸":"б/с"}</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelOrdM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteOrder(delOrdM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
+    {/* МОДАЛ: УДАЛЕНИЕ ПОСТАВКИ */}
+    {delDelvM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:340,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>⚠️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить поставку?</div>
+        <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delDelvM.package_id)}</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:4}}>{sn(delDelvM.store_id)} · {fmtDate(delDelvM.delivery_date)}</div>
+        <div style={{fontSize:12,fontWeight:700,color:C.rd,marginBottom:10}}>{fmt(delDelvM.amount_invoiced)} ₸{delDelvM.invoice_number&&` · №${delDelvM.invoice_number}`}</div>
+        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>⚠️ Удаление поставки не отменяет оплату поставщику.</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelDelvM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteDelivery(delDelvM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
+    {/* МОДАЛ: УДАЛЕНИЕ ОПЛАТЫ */}
+    {delPayM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить оплату?</div>
+        <div style={{fontSize:12,color:C.md,marginBottom:4}}>{suppliers.find((s:any)=>s.id===delPayM.supplier_id)?.name||"—"}</div>
+        <div style={{fontSize:14,fontWeight:700,color:C.rd,marginBottom:10}}>{fmt(delPayM.amount)} ₸ · {fmtDate(delPayM.date)}</div>
+        <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:C.rd,marginBottom:14,textAlign:"left"}}>Долг поставщика увеличится на эту сумму.</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelPayM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deletePayment(delPayM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
+  {/* МОДАЛ: УДАЛЕНИЕ ПОСТАВЩИКА */}
+    {delSupM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:340,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>{packages.some((p:any)=>p.supplier_id===delSupM.id)?"⚠️":"🗑️"}</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить поставщика?</div>
+        <div style={{fontSize:13,color:C.md,fontWeight:600,marginBottom:10}}>«{delSupM.name}»</div>
+        {packages.some((p:any)=>p.supplier_id===delSupM.id)&&<div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"9px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>
+          ⚠️ У поставщика есть пакеты — он будет деактивирован, не удалён.
+        </div>}
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelSupM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteSup(delSupM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            {packages.some((p:any)=>p.supplier_id===delSupM.id)?"Деактивировать":"Удалить"}
+          </button>
+        </div>
+      </div>
+    </div>}
+
+    {/* МОДАЛ: УДАЛЕНИЕ ПАКЕТА */}
+    {delPkgM&&(()=>{
+      const sup=suppliers.find((s:any)=>s.id===delPkgM.supplier_id);
+      const hasUsage=orders.some((o:any)=>o.package_id===delPkgM.id)||deliveries.some((d:any)=>d.package_id===delPkgM.id);
+      return(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:340,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+          <div style={{fontSize:28,marginBottom:8}}>{hasUsage?"⚠️":"🗑️"}</div>
+          <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить пакет?</div>
+          <div style={{fontSize:13,color:C.md,fontWeight:600,marginBottom:4}}>«{delPkgM.name}»</div>
+          <div style={{fontSize:11,color:C.mu,marginBottom:10}}>{sup?.name}</div>
+          {hasUsage&&<div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"9px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>
+            ⚠️ Есть заказы или поставки — пакет будет деактивирован, не удалён. Расписание будет удалено.
+          </div>}
+          {!hasUsage&&<div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:8,padding:"9px 12px",fontSize:11,color:C.rd,marginBottom:14,textAlign:"left"}}>
+            Также будет удалено всё расписание по этому пакету.
+          </div>}
+          <div style={{display:"flex",gap:7}}>
+            <button onClick={()=>setDelPkgM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+            <button onClick={()=>deletePkg(delPkgM)} style={{flex:1,background:hasUsage?C.am:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {hasUsage?"Деактивировать":"Удалить"}
+            </button>
+          </div>
+        </div>
+      </div>);
+    })()}
+
   </div>);
 }

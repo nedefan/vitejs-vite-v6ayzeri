@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import DebtModule from "./DebtModule";
 import SuppliersModule from "./SuppliersModule";
+import FeedbackButton from "./FeedbackButton";
 
 // ═══ SUPABASE ═══
 const SUPA_URL = "https://mhbeicelkyezgyvjnlkd.supabase.co";
@@ -505,17 +506,14 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [debtMoves, setDebtMoves] = useState([]);
 
-  // ── ПОСТАВЩИКИ И ЗАКУПКИ ──
-  const [suppliers, setSuppliers] = useState([]);
-  const [purchases, setPurchases] = useState([]);
-  const [supplierPayments, setSupplierPayments] = useState([]);
+
 
   // ── ЗАГРУЗКА ДАННЫХ ───────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes, supRes, purRes, spRes] = await Promise.all([
+      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes] = await Promise.all([
         sb.from("stores").select("*").order("id"),
         sb.from("positions").select("*").order("id"),
         sb.from("employees").select("*").order("id"),
@@ -524,9 +522,7 @@ export default function App() {
         sb.from("schedule").select("*"),
         sb.from("debts").select("*").order("id"),
         sb.from("debt_moves").select("*").order("date", {ascending:false}),
-        sb.from("suppliers").select("*").order("name"),
-        sb.from("purchases").select("*").order("date", {ascending:false}),
-        sb.from("supplier_payments").select("*").order("date", {ascending:false}),
+
       ]);
       const sts = stRes.data || [];
       const poss = posRes.data || [];
@@ -559,9 +555,7 @@ export default function App() {
       setSchedule(schedMap);
       setDebts(debtRes.data || []);
       setDebtMoves(dmRes.data || []);
-      setSuppliers(supRes.data || []);
-      setPurchases(purRes.data || []);
-      setSupplierPayments(spRes.data || []);
+
     } catch(e) {
       setError("Ошибка загрузки: " + e.message);
     }
@@ -1477,78 +1471,137 @@ export default function App() {
     </div>);
   }
 
-  // ── РЕНДЕР ────────────────────────────────────────────────────────────────
-  // Флаги расширенного доступа
-  const canSuppliers = role==="owner" || role==="manager" || appUser?.access_suppliers===true || appUser?.access_finance===true;
-  const canFinance   = role==="owner" || role==="manager" || appUser?.access_finance===true;
-
   // Фильтруем вкладки по роли
-  const visibleTabs = TOP_TABS.filter(t => {
-    if (role === "owner" || role === "manager") return true;
-    if (t.k === "input")     return true;
-    if (t.k === "reports")   return canFinance || role==="admin";
-    if (t.k === "debts")     return appUser?.access_debts === true;
-    if (t.k === "suppliers") return canSuppliers;
-    return false;
-  });
+  // Флаги доступа
+  const isOwner     = role==="owner" || role==="manager";
+  const canSuppliers = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
+  const canFinance   = isOwner || appUser?.access_finance===true;
 
   // manager/admin видит только свой магазин
-  const visibleStores = role === "owner" ? stores : stores.filter(s => s.id === myStoreId);
+  const visibleStores = role === "owner" ? stores : stores.filter((s:any) => s.id === myStoreId);
+
+  // ── Группы навигации ─────────────────────────────────────────────────────
+  const NAV_GROUPS = [
+    {
+      key: "hr", label: "👥 Персонал", color: C.or,
+      items: [
+        {k:"input",   l:"🏪 Ввод смен",    show: true},
+        {k:"sched",   l:"📅 Расписание",   show: role==="owner"||role==="manager"},
+        {k:"reports", l:"📊 Отчёты",       show: canFinance||role==="admin"},
+        {k:"refs",    l:"📚 Справочники",  show: role==="owner"||role==="manager"},
+        {k:"debts",   l:"💳 Задолженности",show: isOwner||appUser?.access_debts===true},
+      ].filter(i=>i.show),
+    },
+    {
+      key: "supply", label: "🏭 Закупки", color: C.pu,
+      items: [
+        {k:"suppliers", l:"🏭 Поставщики", show: canSuppliers},
+      ].filter(i=>i.show),
+    },
+    ...(role==="owner" ? [{
+      key: "settings", label: "⚙️ Настройки", color: C.md,
+      items: [
+        {k:"users",   l:"👥 Пользователи", show: true},
+        {k:"cleanup", l:"🗑 Очистка данных",show: true},
+      ],
+    }] : []),
+  ].filter(g=>g.items.length>0);
+
+  const sideNavItem = (k:string, l:string, active:boolean, color:string) => ({
+    display:"flex" as const, alignItems:"center" as const, gap:9,
+    padding:"8px 14px", margin:"1px 8px", borderRadius:8,
+    cursor:"pointer" as const, fontSize:12, fontWeight: active?700:500,
+    fontFamily:"inherit", border:"none",
+    background: active ? `${color}18` : "transparent",
+    color: active ? color : C.md,
+    borderLeft: active ? `3px solid ${color}` : "3px solid transparent",
+    transition:"all .15s",
+  });
 
   return (
-<div style={{fontFamily:"system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.tx}}>
-  <div style={{background:C.w,borderBottom:`1px solid ${C.bdr}`,padding:"0 16px",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
-    <div style={{display:"flex",alignItems:"center",height:46,gap:10}}>
-      <div style={{background:"linear-gradient(135deg,#f97316,#ea580c)",borderRadius:7,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:10,color:"#fff"}}>100</div>
-      <span style={{fontWeight:800,fontSize:13}}>100 Food OF</span>
-      <span style={{fontSize:10,color:C.mu}}>HR</span>
-      {saving&&<span style={{fontSize:10,color:C.or,marginLeft:8}}>💾 сохранение...</span>}
-      <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-        <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:20,padding:"3px 10px",display:"flex",alignItems:"center",gap:6}}>
-          <span style={{fontSize:10,color:C.or,fontWeight:700}}>{ROLE_LABELS[role]||role}</span>
-          <span style={{fontSize:10,color:C.mu}}>{appUser?.full_name||appUser?.email||""}</span>
-          <button onClick={refreshRole} title="Обновить роль" style={{background:"none",border:"none",cursor:"pointer",fontSize:11,padding:"0 2px",color:C.mu}}>↻</button>
-        </div>
-        {role==="owner"&&<button onClick={()=>{setUsersTab(true);loadAppUsers();}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"4px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>👥 Пользователи</button>}
+<div style={{fontFamily:"system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.tx,display:"flex"}}>
 
-        <button onClick={signOut} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,padding:"4px 9px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Выйти</button>
-      </div>
-    </div>
-    <div style={{display:"flex",overflowX:"auto"}}>
-      {visibleTabs.map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={{background:"none",border:"none",cursor:"pointer",padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",whiteSpace:"nowrap",color:tab===t.k?C.or:C.mu,borderBottom:tab===t.k?`2px solid ${C.or}`:"2px solid transparent"}}>{t.l}</button>)}
-    </div>
-  </div>
+  {/* ── БОКОВАЯ ПАНЕЛЬ ──────────────────────────────────────────── */}
+  <div style={{width:220,minHeight:"100vh",background:C.w,borderRight:`1px solid ${C.bdr}`,display:"flex",flexDirection:"column",flexShrink:0,position:"sticky",top:0,height:"100vh",overflowY:"auto"}}>
 
-  <div style={{padding:"14px 16px",maxWidth:1400,margin:"0 auto"}}>
-    {tab==="input"&&renderInput()}
-    {tab==="sched"&&renderSched()}
-    {tab==="reports"&&(<div>
-      <div style={{marginBottom:14}}><h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 Отчёты</h2>
-        <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
-          {REP_TABS.filter(t=>!(role==="admin"&&t.k==="pay")).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
-        </div>
-      </div>
-      {repTab==="erep"&&renderErep()}
-      {repTab==="srep"&&renderSrep()}
-      {repTab==="pay"&&renderPay()}
-    </div>)}
-    {tab==="refs"&&(<div>
-      <div style={{marginBottom:14,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+    {/* Логотип */}
+    <div style={{padding:"16px 20px 12px",borderBottom:`1px solid ${C.bdr}`}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{background:"linear-gradient(135deg,#f97316,#ea580c)",borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:11,color:"#fff",flexShrink:0}}>100</div>
         <div>
-          <h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📚 Справочники</h2>
-          <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>{REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subTabBtn(refTab===t.k)}>{t.l}</button>)}</div>
+          <div style={{fontWeight:800,fontSize:13,lineHeight:1.2}}>100 Food OF</div>
+          <div style={{fontSize:9,color:C.mu,letterSpacing:"0.5px"}}>ПЛАТФОРМА</div>
         </div>
-        {role==="owner"&&<button onClick={()=>{setCleanupTab(true);setCleanupResult(null);}} style={{background:C.rdBg,border:`2px solid ${C.rdBd}`,color:C.rd,padding:"8px 16px",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
-          🗑 Очистка базы данных
-        </button>}
       </div>
-      {refTab==="emp"&&renderEmp()}
-      {refTab==="stores"&&renderStores()}
-      {refTab==="pos"&&renderPos()}
-    </div>)}
-    {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
-    {tab==="suppliers"&&<SuppliersModule sb={sb} stores={stores} suppliers={suppliers} setSuppliers={setSuppliers} purchases={purchases} setPurchases={setPurchases} payments={supplierPayments} setPayments={setSupplierPayments}/>}
+      {saving&&<div style={{marginTop:6,fontSize:10,color:C.or}}>💾 сохранение...</div>}
+    </div>
+
+    {/* Навигация */}
+    <div style={{flex:1,paddingTop:8,paddingBottom:8}}>
+      {NAV_GROUPS.map(group=>(
+        <div key={group.key} style={{marginBottom:4}}>
+          <div style={{padding:"8px 20px 4px",fontSize:9,fontWeight:800,color:C.mu,letterSpacing:"0.8px",textTransform:"uppercase" as const}}>{group.label}</div>
+          {group.items.map((item:any)=>(
+            <button key={item.k} onClick={()=>{
+              if(item.k==="users"){setUsersTab(true);loadAppUsers();}
+              else if(item.k==="cleanup"){setCleanupTab(true);setCleanupResult(null);}
+              else setTab(item.k);
+            }} style={sideNavItem(item.k, item.l, tab===item.k && item.k!=="users" && item.k!=="cleanup", group.color)}>
+              {item.l}
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+
+    {/* Пользователь внизу */}
+    <div style={{borderTop:`1px solid ${C.bdr}`,padding:"12px 14px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+        <div style={{width:28,height:28,borderRadius:"50%",background:C.orBg,border:`1px solid ${C.orBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.or,flexShrink:0}}>
+          {(appUser?.full_name||appUser?.email||"?")[0].toUpperCase()}
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:11,fontWeight:600,color:C.tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{appUser?.full_name||appUser?.email||""}</div>
+          <div style={{fontSize:10,color:C.or,fontWeight:700}}>{ROLE_LABELS[role]||role}</div>
+        </div>
+        <button onClick={refreshRole} title="Обновить роль" style={{background:"none",border:"none",cursor:"pointer",fontSize:12,padding:"2px",color:C.mu,flexShrink:0}}>↻</button>
+      </div>
+      <button onClick={signOut} style={{width:"100%",background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"6px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Выйти</button>
+    </div>
   </div>
+
+  {/* ── ОСНОВНОЙ КОНТЕНТ ────────────────────────────────────────── */}
+  <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
+    <div style={{padding:"16px 20px",maxWidth:1300,width:"100%",margin:"0 auto"}}>
+      {tab==="input"&&renderInput()}
+      {tab==="sched"&&renderSched()}
+      {tab==="reports"&&(<div>
+        <div style={{marginBottom:14}}><h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 Отчёты</h2>
+          <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
+            {REP_TABS.filter(t=>!(role==="admin"&&t.k==="pay")).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
+          </div>
+        </div>
+        {repTab==="erep"&&renderErep()}
+        {repTab==="srep"&&renderSrep()}
+        {repTab==="pay"&&renderPay()}
+      </div>)}
+      {tab==="refs"&&(<div>
+        <div style={{marginBottom:14,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+          <div>
+            <h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📚 Справочники</h2>
+            <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>{REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subTabBtn(refTab===t.k)}>{t.l}</button>)}</div>
+          </div>
+        </div>
+        {refTab==="emp"&&renderEmp()}
+        {refTab==="stores"&&renderStores()}
+        {refTab==="pos"&&renderPos()}
+      </div>)}
+      {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
+      {tab==="suppliers"&&<SuppliersModule sb={sb} stores={stores} appUser={appUser}/>}
+    </div>
+  </div>
+
+  <FeedbackButton sb={sb} appUser={appUser} currentTab={tab}/>
 
   {/* МОДАЛ ДОБАВИТЬ НА СМЕНУ */}
   {addM&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
