@@ -1471,7 +1471,7 @@ export default function App() {
     if (role === "owner" || role === "manager") return true;
     if (t.k === "input")   return true;
     if (t.k === "reports") return true;
-    if (t.k === "debts")   return true;
+    if (t.k === "debts")   return appUser?.access_debts === true;
     return false;
   });
 
@@ -1771,7 +1771,7 @@ export default function App() {
       </div>
 
       <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
-        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch=""/></tr></thead>
+        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="Задолж."/><TH ch=""/></tr></thead>
         <tbody>{appUsers.map((u,i)=>{
           const isEdit = editUser?.id===u.id;
           return(<tr key={u.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
@@ -1797,6 +1797,12 @@ export default function App() {
                 </select>
               :<span style={{fontSize:11,color:C.md}}>{u.store_id?sn(u.store_id):"Все магазины"}</span>
             }/>
+            <TD ch={<label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={u.access_debts||false} onChange={async()=>{
+              const newVal=!u.access_debts;
+              await sb.from("app_users").update({access_debts:newVal}).eq("id",u.id);
+              loadAppUsers();
+              if(u.id===appUser?.id) setAppUser({...appUser,access_debts:newVal});
+            }}/><span style={{fontSize:10,color:u.access_debts?C.gn:C.mu}}>{u.access_debts?"✓":"—"}</span></label>}/>
             <TD ch={isEdit
               ?<div style={{display:"flex",gap:4}}>
                   <button onClick={()=>{
