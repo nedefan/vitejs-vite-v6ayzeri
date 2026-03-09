@@ -43,8 +43,11 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
 
   // ── ui state ─────────────────────────────────────────────────────────────
   const [tab, setTab] = useState("schedule");
-  const [selDow, setSelDow] = useState(new Date().getDay()||1);
-  const [refTab, setRefTab] = useState("sup");
+  const [selDow,     setSelDow]     = useState(new Date().getDay()||1);
+  const [refTab,     setRefTab]     = useState("sup");
+  const [schedFStore,setSchedFStore] = useState(0);
+  const [schedFSup,  setSchedFSup]   = useState(0);
+  const [schedFPkg,  setSchedFPkg]   = useState(0);
 
   // ── modals ────────────────────────────────────────────────────────────────
   const [supModal,   setSupModal]   = useState<null|"add"|any>(null);
@@ -58,6 +61,12 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const [delOrdM,    setDelOrdM]    = useState<null|any>(null);
   const [delDelvM,   setDelDelvM]   = useState<null|any>(null);
   const [delPayM,    setDelPayM]    = useState<null|any>(null);
+  const [agents,     setAgents]     = useState<any[]>([]);
+  const [agentPkgs,  setAgentPkgs]  = useState<any[]>([]);
+  const [agentModal, setAgentModal] = useState<null|"add"|any>(null);
+  const [agentF,     setAgentF]     = useState<any>({});
+  const [delAgentM,  setDelAgentM]  = useState<null|any>(null);
+  const [agentPkgSel,setAgentPkgSel] = useState<number[]>([]);
 
   // ── forms ─────────────────────────────────────────────────────────────────
   const [supF,   setSupF]   = useState<any>({});
@@ -78,13 +87,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ── load ──────────────────────────────────────────────────────────────────
   const loadAll = useCallback(async()=>{
     setLoading(true);
-    const [s,p,sc,o,d,py] = await Promise.all([
+    const [s,p,sc,o,d,py,ag,ap] = await Promise.all([
       sb.from("sup_suppliers").select("*").order("name"),
       sb.from("sup_packages").select("*").order("name"),
       sb.from("sup_schedules").select("*"),
       sb.from("sup_orders").select("*").order("order_date",{ascending:false}),
       sb.from("sup_deliveries").select("*").order("delivery_date",{ascending:false}),
       sb.from("sup_payments").select("*").order("date",{ascending:false}),
+      sb.from("sup_agents").select("*").order("name"),
+      sb.from("sup_agent_packages").select("*"),
     ]);
     if(s.data) setSuppliers(s.data);
     if(p.data) setPackages(p.data);
@@ -92,6 +103,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     if(o.data) setOrders(o.data);
     if(d.data) setDeliveries(d.data);
     if(py.data) setPayments(py.data);
+    if(ag.data) setAgents(ag.data);
+    if(ap.data) setAgentPkgs(ap.data);
     setLoading(false);
   },[]);
   useEffect(()=>{loadAll();},[loadAll]);
@@ -134,64 +147,149 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // TAB: ГРАФИК
   // ════════════════════════════════════════════════════════════════
   function renderSchedule(){
-    const todayDow = new Date().getDay()||7; // 1=Пн..7=Вс
-    const days = [1,2,3,4,5,6,0];
-    const todayScheds = schedules.filter(sc=>{
+    // ── Фильтры ──
+    const [fStore, setFStore] = (window as any).__schedFilters || [0,0];
+    // используем локальные state через ref trick — просто обычные переменные в closure
+    // вместо этого добавим их в общий state компонента (они уже есть как schedFStore, schedFSup, schedFPkg)
+
+    const todayDate = new Date();
+    const todayDow  = todayDate.getDay(); // 0=Вс
+    const todayStr2 = todayDate.toISOString().slice(0,10);
+
+    // Генерируем 7 дней начиная с сегодня
+    const week7 = Array.from({length:7},(_,i)=>{
+      const d = new Date(todayDate); d.setDate(d.getDate()+i);
+      return { dateStr: d.toISOString().slice(0,10), dow: d.getDay(), label: i===0?"Сегодня":i===1?"Завтра":DAY[d.getDay()]+", "+d.getDate(), isToday: i===0 };
+    });
+
+    // Фильтруем расписания
+    const filtered = schedules.filter(sc=>{
       const pkg=pkgObj(sc.package_id); if(!pkg||!pkg.active) return false;
       const sup=supObj(pkg.supplier_id); if(!sup||!sup.active) return false;
       if(!sc.active) return false;
-      const od:number[] = Array.isArray(sc.order_days)?sc.order_days:[];
-      return od.includes(selDow===0?0:selDow);
+      if(schedFStore && sc.store_id!==schedFStore) return false;
+      if(schedFSup   && pkg.supplier_id!==schedFSup) return false;
+      if(schedFPkg   && sc.package_id!==schedFPkg) return false;
+      return true;
     });
+
+    // Группируем по дням недели
+    const byDay = week7.map(day=>{
+      const dow = day.dow;
+      const items = filtered.filter(sc=>{
+        const od:number[]=Array.isArray(sc.order_days)?sc.order_days:[];
+        return od.includes(dow);
+      });
+      return {...day, items};
+    });
+
+    const totalToday = byDay[0].items.length;
+    const totalWeek  = byDay.reduce((s,d)=>s+d.items.length,0);
+
     return(<div>
-      <div style={{display:"flex",gap:4,marginBottom:16,background:C.lt,borderRadius:10,padding:4,display:"inline-flex"}}>
-        {days.map(d=>{
-          const isToday=d===(new Date().getDay());
-          return(<button key={d} onClick={()=>setSelDow(d)} style={{...subBtn(selDow===d),position:"relative",
-            background:selDow===d?(isToday?"linear-gradient(135deg,#f97316,#ea580c)":C.w):"none",
-            color:selDow===d?"#fff":isToday?C.or:C.mu,
-            border:`1px solid ${selDow===d?(isToday?C.or:C.bdr):"transparent"}`}}>
-            {DAY[d]}{isToday&&<span style={{position:"absolute",top:2,right:2,width:5,height:5,borderRadius:"50%",background:C.or}}/>}
-          </button>);
-        })}
-      </div>
-      <div style={{marginBottom:8,fontSize:12,color:C.mu}}>
-        {selDow===new Date().getDay()||selDow===0&&new Date().getDay()===0
-          ?"📍 Сегодня":`📅 ${DAYS_FULL[selDow]}`}
-        {" — "}{todayScheds.length>0?`${todayScheds.length} пакетов к заказу`:"нет заказов по расписанию"}
-      </div>
-      {todayScheds.length===0
-        ?<div style={{background:C.lt,borderRadius:12,padding:40,textAlign:"center",color:C.mu}}>
-          <div style={{fontSize:28,marginBottom:8}}>✅</div>
-          <div style={{fontSize:13,fontWeight:600}}>Заказов на этот день нет</div>
+      {/* ── Фильтры ── */}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={schedFStore||""} onChange={e=>setSchedFStore(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
+          <option value="">🏪 Все магазины</option>
+          {stores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select value={schedFSup||""} onChange={e=>{setSchedFSup(e.target.value?+e.target.value:0);setSchedFPkg(0);}} style={I({width:"auto"})}>
+          <option value="">🏭 Все поставщики</option>
+          {suppliers.filter((s:any)=>s.active).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select value={schedFPkg||""} onChange={e=>setSchedFPkg(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
+          <option value="">📦 Все пакеты</option>
+          {packages.filter((p:any)=>p.active&&(!schedFSup||p.supplier_id===schedFSup)).map((p:any)=><option key={p.id} value={p.id}>{supObj(p.supplier_id)?.name} › {p.name}</option>)}
+        </select>
+        {(schedFStore||schedFSup||schedFPkg)&&<button onClick={()=>{setSchedFStore(0);setSchedFSup(0);setSchedFPkg(0);}} style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"5px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕ Сбросить</button>}
+        <div style={{marginLeft:"auto",display:"flex",gap:10}}>
+          <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:8,padding:"5px 12px",textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:800,color:C.or}}>{totalToday}</div>
+            <div style={{fontSize:9,color:C.or,fontWeight:700}}>СЕГОДНЯ</div>
+          </div>
+          <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:8,padding:"5px 12px",textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:800,color:C.tx}}>{totalWeek}</div>
+            <div style={{fontSize:9,color:C.mu,fontWeight:700}}>ЗА НЕДЕЛЮ</div>
+          </div>
         </div>
-        :<div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {todayScheds.map(sc=>{
-            const pkg=pkgObj(sc.package_id);
-            const sup=supByPkg(sc.package_id);
-            const delivDays:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
-            const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===today);
-            return(<div key={sc.id} style={{background:C.w,border:`1px solid ${hasOrder?C.gnBd:C.bdr}`,borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13}}>{sup?.name||"?"}<span style={{color:C.mu,fontWeight:400}}> › {pkg?.name||"?"}</span></div>
-                <div style={{fontSize:11,color:C.mu,marginTop:3}}>
-                  🏪 {sn(sc.store_id)} · Доставка: {delivDays.map((d:number)=>DAY[d]).join(", ")||"не указано"}
-                  {pkg?.payment_days>0&&` · Отсрочка ${pkg.payment_days} дн.`}
+      </div>
+
+      {/* ── 7 дней ── */}
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {byDay.map(day=>{
+          if(!day.isToday && day.items.length===0) return null;
+          return(
+            <div key={day.dateStr}>
+              {/* День — заголовок */}
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div style={{
+                  background: day.isToday ? "linear-gradient(135deg,#f97316,#ea580c)" : C.lt,
+                  color: day.isToday ? "#fff" : C.md,
+                  borderRadius:8, padding:"4px 14px", fontSize:12, fontWeight:700,
+                }}>
+                  {day.label}
                 </div>
+                <div style={{fontSize:11,color:C.mu}}>{day.dateStr}</div>
+                {day.items.length>0&&<div style={{fontSize:11,color:C.mu}}>{day.items.length} пакетов</div>}
+                <div style={{flex:1,height:1,background:C.bdr}}/>
               </div>
-              {hasOrder
-                ?<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="✓ Заказ создан"/>
-                :<button onClick={()=>{
-                  setOrderF({package_id:sc.package_id,store_id:sc.store_id,order_date:today,status:"sent",
-                    expected_delivery_date:"",amount_ordered:"",notes:""});
-                  setOrderModal("add");
-                }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                  + Создать заказ
-                </button>}
-            </div>);
-          })}
-        </div>
-      }
+
+              {/* Карточки пакетов */}
+              {day.items.length===0
+                ?<div style={{background:C.lt,borderRadius:8,padding:"10px 16px",fontSize:12,color:C.mu}}>Нет заказов по расписанию</div>
+                :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {day.items.map((sc:any)=>{
+                    const pkg=pkgObj(sc.package_id);
+                    const sup=supByPkg(sc.package_id);
+                    const delivDays:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
+                    const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr);
+                    // Агенты этого пакета
+                    const pkgAgents=agentPkgs.filter((ap:any)=>ap.package_id===sc.package_id).map((ap:any)=>agents.find((a:any)=>a.id===ap.agent_id)).filter(Boolean);
+                    return(
+                      <div key={sc.id} style={{
+                        background: hasOrder ? C.gnBg : C.w,
+                        border: `1px solid ${hasOrder?C.gnBd:C.bdr}`,
+                        borderRadius:10, padding:"10px 16px",
+                        display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+                      }}>
+                        <div style={{flex:1,minWidth:200}}>
+                          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>
+                            {sup?.name||"?"}
+                            <span style={{color:C.mu,fontWeight:400}}> › {pkg?.name||"?"}</span>
+                          </div>
+                          <div style={{display:"flex",gap:10,flexWrap:"wrap",fontSize:11,color:C.mu}}>
+                            <span>🏪 {sn(sc.store_id)}</span>
+                            {delivDays.length>0&&<span>🚚 {delivDays.map((d:number)=>DAY[d]).join(", ")}</span>}
+                            {pkg?.payment_days>0&&<span>⏱ {pkg.payment_days} дн.</span>}
+                            {pkgAgents.length>0&&<span>👤 {pkgAgents.map((a:any)=>a.name).join(", ")}</span>}
+                          </div>
+                        </div>
+                        {hasOrder
+                          ?<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="✓ Заказ создан"/>
+                          :<button onClick={()=>{
+                            setOrderF({package_id:sc.package_id,store_id:sc.store_id,
+                              order_date:day.dateStr,status:"sent",
+                              expected_delivery_date:"",amount_ordered:"",notes:""});
+                            setOrderModal("add");
+                          }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                            + Заказать
+                          </button>
+                        }
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+            </div>
+          );
+        })}
+        {totalWeek===0&&<div style={{background:C.lt,borderRadius:12,padding:40,textAlign:"center",color:C.mu}}>
+          <div style={{fontSize:28,marginBottom:8}}>✅</div>
+          <div style={{fontSize:13,fontWeight:600}}>
+            {schedFStore||schedFSup||schedFPkg?"Ничего не найдено по выбранным фильтрам":"На ближайшую неделю заказов нет"}
+          </div>
+        </div>}
+      </div>
     </div>);
   }
 
@@ -394,7 +492,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // TAB: СПРАВОЧНИК (owner/manager)
   // ════════════════════════════════════════════════════════════════
   function renderRefs(){
-    const REF_TABS=[{k:"sup",l:"🏢 Поставщики"},{k:"pkg",l:"📦 Пакеты"},{k:"sched",l:"📅 Расписание"}];
+    const REF_TABS=[{k:"sup",l:"🏢 Поставщики"},{k:"agents",l:"🧑‍💼 Агенты"},{k:"pkg",l:"📦 Пакеты"},{k:"sched",l:"📅 Расписание"}];
     return(<div>
       <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2,marginBottom:16}}>
         {REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subBtn(refTab===t.k)}>{t.l}</button>)}
@@ -423,13 +521,46 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         </div>
       </div>}
 
+      {refTab==="agents"&&<div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <button onClick={()=>{setAgentF({active:true});setAgentPkgSel([]);setAgentModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Агент</button>
+        </div>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+            <thead><tr><TH ch="Агент"/><TH ch="Поставщик"/><TH ch="Телефон"/><TH ch="Пакеты"/><TH ch=""/></tr></thead>
+            <tbody>{agents.map((a:any,i:number)=>{
+              const sup=supObj(a.supplier_id);
+              const aPkgs=agentPkgs.filter((ap:any)=>ap.agent_id===a.id).map((ap:any)=>pkgObj(ap.package_id)).filter(Boolean);
+              return(<tr key={a.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:a.active?1:0.55}}>
+                <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{a.name}</div>{a.email&&<div style={{fontSize:10,color:C.mu}}>{a.email}</div>}</div>}/>
+                <TD ch={<span style={{fontSize:11,color:C.md}}>{sup?.name||"—"}</span>}/>
+                <TD ch={<span style={{fontSize:12}}>{a.phone||"—"}</span>}/>
+                <TD ch={<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                  {aPkgs.length===0?<span style={{fontSize:11,color:C.mu}}>—</span>:aPkgs.map((p:any)=>(
+                    <span key={p.id} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:600}}>{p.name}</span>
+                  ))}
+                </div>}/>
+                <TD ch={<div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>{
+                    setAgentF({...a});
+                    setAgentPkgSel(agentPkgs.filter((ap:any)=>ap.agent_id===a.id).map((ap:any)=>ap.package_id));
+                    setAgentModal(a);
+                  }} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+                  <button onClick={()=>setDelAgentM(a)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
+                </div>}/>
+              </tr>);
+            })}</tbody>
+          </table>
+        </div>
+      </div>}
+
       {refTab==="pkg"&&<div>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
           <button onClick={()=>{setPkgF({active:true,payment_type:"bank",payment_days:14});setPkgModal("add");}} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Пакет</button>
         </div>
         <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
-            <thead><tr><TH ch="Поставщик"/><TH ch="Пакет"/><TH ch="Оплата"/><TH ch="Отсрочка"/><TH ch="Условия"/><TH ch=""/></tr></thead>
+            <thead><tr><TH ch="Поставщик"/><TH ch="Пакет"/><TH ch="Оплата"/><TH ch="Отсрочка"/><TH ch="Условия"/><TH ch="Агенты"/><TH ch=""/></tr></thead>
             <tbody>{packages.map((p:any,i:number)=>{
               const sup=supObj(p.supplier_id);
               return(<tr key={p.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:p.active?1:0.55}}>
@@ -438,6 +569,10 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                 <TD ch={p.payment_type==="bank"?<Bdg c={C.bl} bg={C.blBg} bd={C.blBd} ch="🏦 Банк"/>:<Bdg c={C.am} bg={C.amBg} bd={C.amBd} ch="💵 Нал"/>}/>
                 <TD ch={<span style={{fontSize:12}}>{p.payment_type==="bank"?`${p.payment_days} дн.`:"—"}</span>}/>
                 <TD ch={<span style={{fontSize:11,color:C.mu}}>{p.notes||"—"}</span>}/>
+                <TD ch={<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                  {agentPkgs.filter((ap:any)=>ap.package_id===p.id).map((ap:any)=>{const ag=agents.find((a:any)=>a.id===ap.agent_id);return ag?<span key={ap.id} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"1px 6px",borderRadius:20,fontSize:10}}>{ag.name}</span>:null;}).filter(Boolean)}
+                  {agentPkgs.filter((ap:any)=>ap.package_id===p.id).length===0&&<span style={{fontSize:10,color:C.mu}}>—</span>}
+                </div>}/>
                 <TD ch={<div style={{display:"flex",gap:4}}>
                   <button onClick={()=>{setPkgF({...p});setPkgModal(p);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
                   <button onClick={()=>setDelPkgM(p)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
@@ -528,6 +663,34 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     await sb.from("sup_payments").delete().eq("id",p.id);
     setPayments(payments.filter((x:any)=>x.id!==p.id));
     setDelPayM(null);
+  }
+  async function saveAgent(){
+    if(!agentF.name?.trim()||!agentF.supplier_id) return; setSaving(true);
+    let agentId = agentF.id;
+    if(agentModal==="add"){
+      const{data}=await sb.from("sup_agents").insert({name:agentF.name,supplier_id:agentF.supplier_id,phone:agentF.phone||"",email:agentF.email||"",notes:agentF.notes||"",active:true}).select().single();
+      if(data){setAgents([...agents,data]);agentId=data.id;}
+    } else {
+      const{data}=await sb.from("sup_agents").update({name:agentF.name,phone:agentF.phone||"",email:agentF.email||"",notes:agentF.notes||""}).eq("id",agentF.id).select().single();
+      if(data) setAgents(agents.map((a:any)=>a.id===data.id?data:a));
+    }
+    // Save package links
+    if(agentId){
+      await sb.from("sup_agent_packages").delete().eq("agent_id",agentId);
+      if(agentPkgSel.length>0){
+        await sb.from("sup_agent_packages").insert(agentPkgSel.map(pkgId=>({agent_id:agentId,package_id:pkgId})));
+      }
+      const{data:ap}=await sb.from("sup_agent_packages").select("*");
+      if(ap) setAgentPkgs(ap);
+    }
+    setSaving(false); setAgentModal(null);
+  }
+  async function deleteAgent(a:any){
+    await sb.from("sup_agent_packages").delete().eq("agent_id",a.id);
+    await sb.from("sup_agents").delete().eq("id",a.id);
+    setAgents(agents.filter((x:any)=>x.id!==a.id));
+    setAgentPkgs(agentPkgs.filter((x:any)=>x.agent_id!==a.id));
+    setDelAgentM(null);
   }
   async function saveSchedule(){
     if(!schedF.package_id||!schedF.store_id)return; setSaving(true);
@@ -798,6 +961,56 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
       </div>
     </div>}
 
+  {/* МОДАЛ: АГЕНТ */}
+    {agentModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:20,width:460,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:14}}>{agentModal==="add"?"Новый агент":"Редактировать агента"}</div>
+        <div style={{display:"flex",flexDirection:"column",gap:9}}>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПОСТАВЩИК</div>
+            <select value={agentF.supplier_id||""} onChange={e=>setAgentF({...agentF,supplier_id:+e.target.value})} style={I()}>
+              <option value="">— Выбрать —</option>
+              {suppliers.filter((s:any)=>s.active).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ИМЯ АГЕНТА</div><input value={agentF.name||""} onChange={e=>setAgentF({...agentF,name:e.target.value})} placeholder="Имя Фамилия" style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ТЕЛЕФОН</div><input value={agentF.phone||""} onChange={e=>setAgentF({...agentF,phone:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>EMAIL</div><input value={agentF.email||""} onChange={e=>setAgentF({...agentF,email:e.target.value})} style={I()}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ЗАМЕТКИ</div><input value={agentF.notes||""} onChange={e=>setAgentF({...agentF,notes:e.target.value})} style={I()}/></div>
+          <div>
+            <div style={{fontSize:9,color:C.mu,marginBottom:6,fontWeight:700}}>ПАКЕТЫ ЭТОГО АГЕНТА</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:200,overflowY:"auto",border:`1px solid ${C.bdr}`,borderRadius:8,padding:"8px 10px"}}>
+              {packages.filter((p:any)=>p.active&&(!agentF.supplier_id||p.supplier_id===Number(agentF.supplier_id))).map((p:any)=>{
+                const sup=supObj(p.supplier_id);
+                const checked=agentPkgSel.includes(p.id);
+                return(<label key={p.id} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,padding:"2px 0"}}>
+                  <input type="checkbox" checked={checked} onChange={()=>setAgentPkgSel(checked?agentPkgSel.filter(x=>x!==p.id):[...agentPkgSel,p.id])} style={{cursor:"pointer"}}/>
+                  <span style={{color:C.mu,fontSize:10}}>{sup?.name} ›</span>
+                  <span style={{fontWeight:600}}>{p.name}</span>
+                </label>);
+              })}
+              {packages.filter((p:any)=>p.active&&(!agentF.supplier_id||p.supplier_id===Number(agentF.supplier_id))).length===0&&
+                <div style={{fontSize:11,color:C.mu}}>Сначала выберите поставщика</div>}
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setAgentModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={saveAgent} disabled={saving||!agentF.name?.trim()||!agentF.supplier_id} style={{flex:1,background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>Сохранить</button>
+        </div>
+      </div>
+    </div>}
+    {/* МОДАЛ: УДАЛЕНИЕ АГЕНТА */}
+    {delAgentM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить агента?</div>
+        <div style={{fontSize:13,color:C.md,fontWeight:600,marginBottom:14}}>«{delAgentM.name}»</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelAgentM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteAgent(delAgentM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
   {/* МОДАЛ: УДАЛЕНИЕ ЗАКАЗА */}
     {delOrdM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
