@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import DebtModule from "./DebtModule";
+import SuppliersModule from "./SuppliersModule";
+import FeedbackButton from "./FeedbackButton";
 
 // ═══ SUPABASE ═══
 const SUPA_URL = "https://mhbeicelkyezgyvjnlkd.supabase.co";
@@ -418,7 +420,7 @@ const Bdg = ({c,bg,bd,ch}) => <span style={{background:bg,border:`1px solid ${bd
 const TH = ({ch}) => <th style={{padding:"8px 10px",textAlign:"left",fontSize:9,fontWeight:700,color:C.mu,letterSpacing:"0.5px",textTransform:"uppercase",whiteSpace:"nowrap",background:C.lt,borderBottom:`1px solid ${C.bdr}`}}>{ch}</th>;
 const TD = ({ch,s={}}) => <td style={{padding:"8px 10px",fontSize:12,borderBottom:"1px solid #f1f5f9",...s}}>{ch}</td>;
 
-const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"},{k:"debts",l:"💳 Задолженности"}];
+const TOP_TABS = [{k:"input",l:"🏪 Ввод"},{k:"sched",l:"📅 Расписание"},{k:"reports",l:"📊 Отчёты"},{k:"refs",l:"📚 Справочники"},{k:"suppliers",l:"🏭 Поставщики"},{k:"debts",l:"💳 Задолженности"}];
 const REP_TABS = [{k:"erep",l:"👤 По сотруднику"},{k:"srep",l:"🏪 По магазину"},{k:"pay",l:"💰 По зарплате"}];
 const REF_TABS = [{k:"emp",l:"👥 Сотрудники"},{k:"stores",l:"🏬 Магазины"},{k:"pos",l:"📋 Должности"}];
 
@@ -504,6 +506,8 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [debtMoves, setDebtMoves] = useState([]);
 
+
+
   // ── ЗАГРУЗКА ДАННЫХ ───────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -518,6 +522,7 @@ export default function App() {
         sb.from("schedule").select("*"),
         sb.from("debts").select("*").order("id"),
         sb.from("debt_moves").select("*").order("date", {ascending:false}),
+
       ]);
       const sts = stRes.data || [];
       const poss = posRes.data || [];
@@ -550,6 +555,7 @@ export default function App() {
       setSchedule(schedMap);
       setDebts(debtRes.data || []);
       setDebtMoves(dmRes.data || []);
+
     } catch(e) {
       setError("Ошибка загрузки: " + e.message);
     }
@@ -1144,6 +1150,76 @@ export default function App() {
           </table>
         }
       </div>
+
+      {/* ── СВОДНАЯ ТАБЛИЦА ПО ДНЯМ МЕСЯЦА ── */}
+      {(()=>{
+        const mo = date.slice(0,7);
+        const year = +mo.slice(0,4), month = +mo.slice(5,7)-1;
+        const daysInMonth = new Date(year, month+1, 0).getDate();
+        const today = new Date().toISOString().slice(0,10);
+        const DAY_SHORT = ["Вс","Пн","Вт","Ср","Чт","Пт","Сб"];
+        const days = Array.from({length:daysInMonth},(_,i)=>{
+          const d = String(i+1).padStart(2,"0");
+          const dateStr = `${mo}-${d}`;
+          const dow = new Date(dateStr+"T00:00:00").getDay();
+          const dayShiftsCount = shifts.filter(s=>s.date===dateStr&&(store?s.store_id===store:true)).length;
+          const dayRev = getDayRev(store,dateStr);
+          const isToday = dateStr===today;
+          const isSelected = dateStr===date;
+          const isWeekend = dow===0||dow===6;
+          const dayTotal = shifts.filter(s=>s.date===dateStr&&(store?s.store_id===store:true)).reduce((sum,s)=>{const pt=calcParts(s,positions,revenue);return sum+pt.total;},0);
+          return {dateStr,dow,dayShiftsCount,dayRev,isToday,isSelected,isWeekend,dayTotal,d};
+        });
+        return(
+          <div style={{marginTop:16,background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"hidden"}}>
+            <div style={{padding:"10px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.md}}>📅 {mo} — все дни</span>
+              <span style={{fontSize:11,color:C.mu}}>нажми на день чтобы перейти</span>
+            </div>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+                <thead>
+                  <tr>{days.map(({dateStr,dow,d,isWeekend})=>(
+                    <th key={dateStr} style={{padding:"5px 3px",textAlign:"center",fontSize:9,fontWeight:700,
+                      color:isWeekend?C.rd:C.mu,background:C.lt,borderBottom:`1px solid ${C.bdr}`,
+                      minWidth:38,cursor:"pointer"}} onClick={()=>setDate(dateStr)}>
+                      <div>{d}</div>
+                      <div style={{fontWeight:500}}>{DAY_SHORT[dow]}</div>
+                    </th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  <tr>{days.map(({dateStr,dayShiftsCount,dayRev,isToday,isSelected,isWeekend,dayTotal})=>(
+                    <td key={dateStr} onClick={()=>setDate(dateStr)} style={{
+                      padding:"6px 3px",textAlign:"center",cursor:"pointer",
+                      borderBottom:`1px solid ${C.bdr}`,
+                      background: isSelected?"linear-gradient(135deg,#fff7ed,#fef3c7)":isToday?"#fffbf5":isWeekend?"#fafafa":C.w,
+                      borderLeft: isSelected?`2px solid ${C.or}`:isToday?`2px solid ${C.orBd}`:"2px solid transparent",
+                      transition:"background .1s",
+                    }}>
+                      {dayShiftsCount>0
+                        ?<div>
+                          <div style={{fontSize:11,fontWeight:700,color:C.gn}}>{dayShiftsCount}👤</div>
+                          {dayTotal>0&&<div style={{fontSize:9,color:C.gn,lineHeight:1.3}}>{Math.round(dayTotal/1000)}к ₸</div>}
+                          {dayRev>0&&<div style={{fontSize:9,color:C.bl,lineHeight:1.3}}>{Math.round(dayRev/1000)}к</div>}
+                        </div>
+                        :<div style={{fontSize:10,color:C.mu}}>—</div>
+                      }
+                    </td>
+                  ))}</tr>
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:"6px 14px",display:"flex",gap:12,fontSize:10,color:C.mu,borderTop:`1px solid ${C.bdr}`,flexWrap:"wrap"}}>
+              <span><span style={{color:C.gn,fontWeight:700}}>N👤</span> — сотрудников</span>
+              <span><span style={{color:C.gn}}>Nк ₸</span> — зарплата итого</span>
+              <span><span style={{color:C.bl}}>Nк</span> — выручка</span>
+              <span style={{marginLeft:"auto"}}><span style={{borderLeft:`3px solid ${C.or}`,paddingLeft:4,color:C.or,fontWeight:600}}>выбранный день</span></span>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
     );
   }
@@ -1465,72 +1541,137 @@ export default function App() {
     </div>);
   }
 
-  // ── РЕНДЕР ────────────────────────────────────────────────────────────────
   // Фильтруем вкладки по роли
-  const visibleTabs = TOP_TABS.filter(t => {
-    if (role === "owner" || role === "manager") return true;
-    if (t.k === "input")   return true;
-    if (t.k === "reports") return true;
-    if (t.k === "debts")   return appUser?.access_debts === true;
-    return false;
-  });
+  // Флаги доступа
+  const isOwner     = role==="owner" || role==="manager";
+  const canSuppliers = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
+  const canFinance   = isOwner || appUser?.access_finance===true;
 
   // manager/admin видит только свой магазин
-  const visibleStores = role === "owner" ? stores : stores.filter(s => s.id === myStoreId);
+  const visibleStores = role === "owner" ? stores : stores.filter((s:any) => s.id === myStoreId);
+
+  // ── Группы навигации ─────────────────────────────────────────────────────
+  const NAV_GROUPS = [
+    {
+      key: "hr", label: "👥 Персонал", color: C.or,
+      items: [
+        {k:"input",   l:"🏪 Ввод смен",    show: true},
+        {k:"sched",   l:"📅 Расписание",   show: role==="owner"||role==="manager"},
+        {k:"reports", l:"📊 Отчёты",       show: canFinance||role==="admin"},
+        {k:"refs",    l:"📚 Справочники",  show: role==="owner"||role==="manager"},
+        {k:"debts",   l:"💳 Задолженности",show: isOwner||appUser?.access_debts===true},
+      ].filter(i=>i.show),
+    },
+    {
+      key: "supply", label: "🏭 Закупки", color: C.pu,
+      items: [
+        {k:"suppliers", l:"🏭 Поставщики", show: canSuppliers},
+      ].filter(i=>i.show),
+    },
+    ...(role==="owner" ? [{
+      key: "settings", label: "⚙️ Настройки", color: C.md,
+      items: [
+        {k:"users",   l:"👥 Пользователи", show: true},
+        {k:"cleanup", l:"🗑 Очистка данных",show: true},
+      ],
+    }] : []),
+  ].filter(g=>g.items.length>0);
+
+  const sideNavItem = (k:string, l:string, active:boolean, color:string) => ({
+    display:"flex" as const, alignItems:"center" as const, gap:9,
+    padding:"8px 14px", margin:"1px 8px", borderRadius:8,
+    cursor:"pointer" as const, fontSize:12, fontWeight: active?700:500,
+    fontFamily:"inherit", border:"none",
+    background: active ? `${color}18` : "transparent",
+    color: active ? color : C.md,
+    borderLeft: active ? `3px solid ${color}` : "3px solid transparent",
+    transition:"all .15s",
+  });
 
   return (
-<div style={{fontFamily:"system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.tx}}>
-  <div style={{background:C.w,borderBottom:`1px solid ${C.bdr}`,padding:"0 16px",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>
-    <div style={{display:"flex",alignItems:"center",height:46,gap:10}}>
-      <div style={{background:"linear-gradient(135deg,#f97316,#ea580c)",borderRadius:7,width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:10,color:"#fff"}}>100</div>
-      <span style={{fontWeight:800,fontSize:13}}>100 Food OF</span>
-      <span style={{fontSize:10,color:C.mu}}>HR</span>
-      {saving&&<span style={{fontSize:10,color:C.or,marginLeft:8}}>💾 сохранение...</span>}
-      <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-        <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:20,padding:"3px 10px",display:"flex",alignItems:"center",gap:6}}>
-          <span style={{fontSize:10,color:C.or,fontWeight:700}}>{ROLE_LABELS[role]||role}</span>
-          <span style={{fontSize:10,color:C.mu}}>{appUser?.full_name||appUser?.email||""}</span>
-          <button onClick={refreshRole} title="Обновить роль" style={{background:"none",border:"none",cursor:"pointer",fontSize:11,padding:"0 2px",color:C.mu}}>↻</button>
-        </div>
-        {role==="owner"&&<button onClick={()=>{setUsersTab(true);loadAppUsers();}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"4px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>👥 Пользователи</button>}
+<div style={{fontFamily:"system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.tx,display:"flex",overflow:"hidden"}}>
 
-        <button onClick={signOut} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,padding:"4px 9px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Выйти</button>
-      </div>
-    </div>
-    <div style={{display:"flex",overflowX:"auto"}}>
-      {visibleTabs.map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={{background:"none",border:"none",cursor:"pointer",padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",whiteSpace:"nowrap",color:tab===t.k?C.or:C.mu,borderBottom:tab===t.k?`2px solid ${C.or}`:"2px solid transparent"}}>{t.l}</button>)}
-    </div>
-  </div>
+  {/* ── БОКОВАЯ ПАНЕЛЬ ──────────────────────────────────────────── */}
+  <div style={{width:220,minHeight:"100vh",background:C.w,borderRight:`1px solid ${C.bdr}`,display:"flex",flexDirection:"column",flexShrink:0,position:"sticky",top:0,height:"100vh",overflowY:"auto"}}>
 
-  <div style={{padding:"14px 16px",maxWidth:1400,margin:"0 auto"}}>
-    {tab==="input"&&renderInput()}
-    {tab==="sched"&&renderSched()}
-    {tab==="reports"&&(<div>
-      <div style={{marginBottom:14}}><h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 Отчёты</h2>
-        <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
-          {REP_TABS.filter(t=>!(role==="admin"&&t.k==="pay")).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
-        </div>
-      </div>
-      {repTab==="erep"&&renderErep()}
-      {repTab==="srep"&&renderSrep()}
-      {repTab==="pay"&&renderPay()}
-    </div>)}
-    {tab==="refs"&&(<div>
-      <div style={{marginBottom:14,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+    {/* Логотип */}
+    <div style={{padding:"16px 20px 12px",borderBottom:`1px solid ${C.bdr}`}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{background:"linear-gradient(135deg,#f97316,#ea580c)",borderRadius:8,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:11,color:"#fff",flexShrink:0}}>100</div>
         <div>
-          <h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📚 Справочники</h2>
-          <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>{REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subTabBtn(refTab===t.k)}>{t.l}</button>)}</div>
+          <div style={{fontWeight:800,fontSize:13,lineHeight:1.2}}>100 Food OF</div>
+          <div style={{fontSize:9,color:C.mu,letterSpacing:"0.5px"}}>ПЛАТФОРМА</div>
         </div>
-        {role==="owner"&&<button onClick={()=>{setCleanupTab(true);setCleanupResult(null);}} style={{background:C.rdBg,border:`2px solid ${C.rdBd}`,color:C.rd,padding:"8px 16px",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
-          🗑 Очистка базы данных
-        </button>}
       </div>
-      {refTab==="emp"&&renderEmp()}
-      {refTab==="stores"&&renderStores()}
-      {refTab==="pos"&&renderPos()}
-    </div>)}
-    {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
+      {saving&&<div style={{marginTop:6,fontSize:10,color:C.or}}>💾 сохранение...</div>}
+    </div>
+
+    {/* Навигация */}
+    <div style={{flex:1,paddingTop:8,paddingBottom:8}}>
+      {NAV_GROUPS.map(group=>(
+        <div key={group.key} style={{marginBottom:4}}>
+          <div style={{padding:"8px 20px 4px",fontSize:9,fontWeight:800,color:C.mu,letterSpacing:"0.8px",textTransform:"uppercase" as const}}>{group.label}</div>
+          {group.items.map((item:any)=>(
+            <button key={item.k} onClick={()=>{
+              if(item.k==="users"){setUsersTab(true);loadAppUsers();}
+              else if(item.k==="cleanup"){setCleanupTab(true);setCleanupResult(null);}
+              else setTab(item.k);
+            }} style={sideNavItem(item.k, item.l, tab===item.k && item.k!=="users" && item.k!=="cleanup", group.color)}>
+              {item.l}
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+
+    {/* Пользователь внизу */}
+    <div style={{borderTop:`1px solid ${C.bdr}`,padding:"12px 14px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+        <div style={{width:28,height:28,borderRadius:"50%",background:C.orBg,border:`1px solid ${C.orBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:C.or,flexShrink:0}}>
+          {(appUser?.full_name||appUser?.email||"?")[0].toUpperCase()}
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:11,fontWeight:600,color:C.tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{appUser?.full_name||appUser?.email||""}</div>
+          <div style={{fontSize:10,color:C.or,fontWeight:700}}>{ROLE_LABELS[role]||role}</div>
+        </div>
+        <button onClick={refreshRole} title="Обновить роль" style={{background:"none",border:"none",cursor:"pointer",fontSize:12,padding:"2px",color:C.mu,flexShrink:0}}>↻</button>
+      </div>
+      <button onClick={signOut} style={{width:"100%",background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"6px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Выйти</button>
+    </div>
   </div>
+
+  {/* ── ОСНОВНОЙ КОНТЕНТ ────────────────────────────────────────── */}
+  <div style={{flex:1,minWidth:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+    <div style={{padding:"16px 20px",maxWidth:1300,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
+      {tab==="input"&&renderInput()}
+      {tab==="sched"&&renderSched()}
+      {tab==="reports"&&(<div>
+        <div style={{marginBottom:14}}><h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 Отчёты</h2>
+          <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
+            {REP_TABS.filter(t=>!(role==="admin"&&t.k==="pay")).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
+          </div>
+        </div>
+        {repTab==="erep"&&renderErep()}
+        {repTab==="srep"&&renderSrep()}
+        {repTab==="pay"&&renderPay()}
+      </div>)}
+      {tab==="refs"&&(<div>
+        <div style={{marginBottom:14,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+          <div>
+            <h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📚 Справочники</h2>
+            <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>{REF_TABS.map(t=><button key={t.k} onClick={()=>setRefTab(t.k)} style={subTabBtn(refTab===t.k)}>{t.l}</button>)}</div>
+          </div>
+        </div>
+        {refTab==="emp"&&renderEmp()}
+        {refTab==="stores"&&renderStores()}
+        {refTab==="pos"&&renderPos()}
+      </div>)}
+      {tab==="debts"&&<DebtModule sb={sb} emps={emps} stores={stores} debts={debts} setDebts={setDebts} debtMoves={debtMoves} setDebtMoves={setDebtMoves}/>}
+      {tab==="suppliers"&&<SuppliersModule sb={sb} stores={stores} appUser={appUser}/>}
+    </div>
+  </div>
+
+  <FeedbackButton sb={sb} appUser={appUser} currentTab={tab}/>
 
   {/* МОДАЛ ДОБАВИТЬ НА СМЕНУ */}
   {addM&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
@@ -1760,7 +1901,7 @@ export default function App() {
 
   {/* ПАНЕЛЬ УПРАВЛЕНИЯ ПОЛЬЗОВАТЕЛЯМИ (только owner) */}
   {usersTab&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
-    <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:640,maxWidth:"96vw",boxShadow:"0 24px 60px rgba(0,0,0,.18)",maxHeight:"90vh",overflowY:"auto"}}>
+    <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:900,maxWidth:"96vw",boxShadow:"0 24px 60px rgba(0,0,0,.18)",maxHeight:"90vh",overflowY:"auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
         <div><div style={{fontWeight:800,fontSize:15}}>👥 Пользователи платформы</div><div style={{fontSize:11,color:C.mu,marginTop:2}}>Управление доступом и ролями</div></div>
         <button onClick={()=>{setUsersTab(false);setEditUser(null);}} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:16}}>×</button>
@@ -1771,9 +1912,15 @@ export default function App() {
       </div>
 
       <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
-        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="Задолж."/><TH ch=""/></tr></thead>
+        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="Доп. доступы"/><TH ch=""/></tr></thead>
         <tbody>{appUsers.map((u,i)=>{
           const isEdit = editUser?.id===u.id;
+          async function toggleAccess(field:string, cur:boolean){
+            const newVal=!cur;
+            await sb.from("app_users").update({[field]:newVal}).eq("id",u.id);
+            loadAppUsers();
+            if(u.id===appUser?.id) setAppUser({...appUser,[field]:newVal});
+          }
           return(<tr key={u.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
             <TD ch={<div style={{display:"flex",alignItems:"center",gap:7}}>
               <div style={{width:28,height:28,borderRadius:"50%",background:u.id===appUser?.id?C.orBg:C.lt,border:`1px solid ${u.id===appUser?.id?C.orBd:C.bdr}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:u.id===appUser?.id?C.or:C.md}}>
@@ -1797,12 +1944,18 @@ export default function App() {
                 </select>
               :<span style={{fontSize:11,color:C.md}}>{u.store_id?sn(u.store_id):"Все магазины"}</span>
             }/>
-            <TD ch={<label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={u.access_debts||false} onChange={async()=>{
-              const newVal=!u.access_debts;
-              await sb.from("app_users").update({access_debts:newVal}).eq("id",u.id);
-              loadAppUsers();
-              if(u.id===appUser?.id) setAppUser({...appUser,access_debts:newVal});
-            }}/><span style={{fontSize:10,color:u.access_debts?C.gn:C.mu}}>{u.access_debts?"✓":"—"}</span></label>}/>
+            <TD ch={<div style={{display:"flex",gap:16}}>
+              {([
+                ["access_debts",    "💳 Долги",     u.access_debts],
+                ["access_suppliers","🏭 Закупщик",  u.access_suppliers],
+                ["access_finance",  "💰 Бухгалтер", u.access_finance],
+              ] as [string,string,boolean][]).map(([field,label,val])=>(
+                <label key={field} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,color:val?C.tx:C.mu,whiteSpace:"nowrap"}}>
+                  <input type="checkbox" checked={val||false} onChange={()=>toggleAccess(field,val||false)} style={{cursor:"pointer",width:14,height:14}}/>
+                  {label}
+                </label>
+              ))}
+            </div>}/>
             <TD ch={isEdit
               ?<div style={{display:"flex",gap:4}}>
                   <button onClick={()=>{
@@ -1819,19 +1972,34 @@ export default function App() {
       </table>
 
       <div style={{background:C.lt,borderRadius:10,padding:"12px 14px"}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.md,marginBottom:8}}>📋 Права по ролям:</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.md,marginBottom:8}}>📋 Права по ролям и доступам:</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md,marginBottom:8}}>
           <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.or,marginBottom:4}}>👑 Владелец</div>
-            <div>✅ Все магазины</div><div>✅ Справочники</div><div>✅ Все отчёты + зарплаты</div><div>✅ Управление пользователями</div>
+            <div>✅ Все магазины</div><div>✅ Справочники</div><div>✅ Все отчёты + зарплаты</div><div>✅ Управление пользователями</div><div>✅ Поставщики и закупки</div>
           </div>
           <div style={{background:C.blBg,border:`1px solid ${C.blBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.bl,marginBottom:4}}>🏪 Управляющий</div>
-            <div>✅ Все магазины</div><div>✅ Все функции</div><div>✅ Все отчёты и зарплаты</div><div>✅ Справочники</div>
+            <div>✅ Все магазины</div><div>✅ Все функции</div><div>✅ Все отчёты и зарплаты</div><div>✅ Справочники</div><div>✅ Поставщики и закупки</div>
           </div>
           <div style={{background:C.puBg,border:`1px solid ${C.puBd}`,borderRadius:7,padding:"8px 10px"}}>
             <div style={{fontWeight:700,color:C.pu,marginBottom:4}}>📋 Администратор</div>
             <div>✅ Только свой магазин</div><div>✅ Ввод смен</div><div>✅ Отчёт по магазину</div><div>✅ Отчёт по сотруднику</div><div>❌ Зарплаты скрыты</div>
+          </div>
+        </div>
+        <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>🔑 Дополнительные доступы (назначаются к любой роли):</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md}}>
+          <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.rd,marginBottom:4}}>💳 Долги</div>
+            <div>✅ Задолженности сотрудников</div><div>✅ Начисления и удержания</div>
+          </div>
+          <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.gn,marginBottom:4}}>🏭 Закупщик</div>
+            <div>✅ Поставщики</div><div>✅ Закупки и накладные</div><div>✅ Оплаты поставщикам</div>
+          </div>
+          <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:7,padding:"8px 10px"}}>
+            <div style={{fontWeight:700,color:C.am,marginBottom:4}}>💰 Бухгалтер</div>
+            <div>✅ Поставщики и закупки</div><div>✅ Все отчёты + зарплаты</div>
           </div>
         </div>
       </div>
