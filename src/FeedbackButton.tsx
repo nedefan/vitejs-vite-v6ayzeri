@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const C = {
-  w:"#fff",bdr:"#e2e8f0",lt:"#f1f5f9",tx:"#0f172a",md:"#475569",mu:"#94a3b8",
+  w:"#fff",bdr:"#e2e8f0",lt:"#f1f5f9",tx:"#0f172a",md:"#475569",mu:"#64748b",
   or:"#ea580c",orBg:"#fff7ed",orBd:"#fed7aa",gn:"#16a34a",gnBg:"#f0fdf4",gnBd:"#bbf7d0",
   rd:"#dc2626",rdBg:"#fef2f2",rdBd:"#fecaca",bl:"#2563eb",blBg:"#eff6ff",blBd:"#bfdbfe",
   am:"#b45309",amBg:"#fffbeb",amBd:"#fde68a",
@@ -15,7 +15,6 @@ const STATUS_CFG:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
   done:        {l:"✅ Готово",    c:C.gn, bg:C.gnBg, bd:C.gnBd},
 };
 
-// Названия вкладок
 const TAB_NAMES:{[k:string]:string} = {
   input:"🏪 Ввод смен", sched:"📅 Расписание", reports:"📊 Отчёты",
   refs:"📚 Справочники", suppliers:"🏭 Поставщики", debts:"💳 Задолженности",
@@ -23,11 +22,25 @@ const TAB_NAMES:{[k:string]:string} = {
   emp:"👥 Сотрудники", stores:"🏬 Магазины", pos:"📋 Должности",
 };
 
-interface Props { sb:any; appUser:any; currentTab:string; }
+interface Props {
+  sb: any;
+  appUser: any;
+  currentTab: string;
+  externalOpen?: boolean;
+  externalInbox?: boolean;
+  onCloseOpen?: () => void;
+  onCloseInbox?: () => void;
+  onUnreadChange?: (n: number) => void;
+}
 
-export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
-  const [open,    setOpen]    = useState(false);
-  const [inbox,   setInbox]   = useState(false);
+export default function FeedbackButton({
+  sb, appUser, currentTab,
+  externalOpen, externalInbox,
+  onCloseOpen, onCloseInbox, onUnreadChange
+}: Props) {
+  // ── state ──────────────────────────────────────────────────────────
+  const [openInternal,  setOpenInternal]  = useState(false);
+  const [inboxInternal, setInboxInternal] = useState(false);
   const [text,    setText]    = useState("");
   const [saving,  setSaving]  = useState(false);
   const [sent,    setSent]    = useState(false);
@@ -35,9 +48,21 @@ export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
   const [loading, setLoading] = useState(false);
   const [filter,  setFilter]  = useState("all");
 
+  // ── computed ───────────────────────────────────────────────────────
   const isOwner = appUser?.role === "owner" || appUser?.role === "manager";
   const unread  = notes.filter(n => n.status === "new").length;
 
+  // ── wrappers that notify parent on close ──────────────────────────
+  const setOpen = (v: boolean) => {
+    setOpenInternal(v);
+    if (!v && onCloseOpen) onCloseOpen();
+  };
+  const setInbox = (v: boolean) => {
+    setInboxInternal(v);
+    if (!v && onCloseInbox) onCloseInbox();
+  };
+
+  // ── data loader (declared before effects that use it) ─────────────
   const loadNotes = useCallback(async () => {
     setLoading(true);
     const { data } = await sb.from("feedback_notes").select("*").order("created_at", { ascending: false });
@@ -45,10 +70,24 @@ export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
     setLoading(false);
   }, [sb]);
 
+  // ── effects ───────────────────────────────────────────────────────
   useEffect(() => {
     if (isOwner) loadNotes();
   }, [isOwner, loadNotes]);
 
+  useEffect(() => {
+    if (externalOpen) setOpenInternal(true);
+  }, [externalOpen]);
+
+  useEffect(() => {
+    if (externalInbox) { setInboxInternal(true); loadNotes(); }
+  }, [externalInbox, loadNotes]);
+
+  useEffect(() => {
+    if (onUnreadChange) onUnreadChange(unread);
+  }, [unread, onUnreadChange]);
+
+  // ── actions ───────────────────────────────────────────────────────
   async function submit() {
     if (!text.trim()) return;
     setSaving(true);
@@ -79,59 +118,11 @@ export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
 
   const filtered = filter === "all" ? notes : notes.filter(n => n.status === filter);
 
+  // ── render ────────────────────────────────────────────────────────
   return (
     <>
-      {/* Плавающая кнопка */}
-      <button
-        onClick={() => setOpen(true)}
-        title="Оставить заметку"
-        style={{
-          position:"fixed", bottom:24, right:isOwner?80:24, zIndex:500,
-          width:48, height:48, borderRadius:"50%",
-          background:"linear-gradient(135deg,#f97316,#ea580c)",
-          border:"none", color:"#fff", fontSize:20, cursor:"pointer",
-          boxShadow:"0 4px 16px rgba(234,88,12,0.4)",
-          display:"flex", alignItems:"center", justifyContent:"center",
-          transition:"transform .15s",
-        }}
-        onMouseEnter={e=>(e.currentTarget.style.transform="scale(1.1)")}
-        onMouseLeave={e=>(e.currentTarget.style.transform="scale(1)")}
-      >
-        📝
-      </button>
-
-      {/* Кнопка инбокса (только owner) */}
-      {isOwner && (
-        <button
-          onClick={() => { setInbox(true); loadNotes(); }}
-          title="Заметки и обратная связь"
-          style={{
-            position:"fixed", bottom:24, right:24, zIndex:500,
-            width:48, height:48, borderRadius:"50%",
-            background: unread > 0 ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : "#64748b",
-            border:"none", color:"#fff", fontSize:18, cursor:"pointer",
-            boxShadow:`0 4px 16px ${unread>0?"rgba(37,99,235,0.4)":"rgba(0,0,0,0.2)"}`,
-            display:"flex", alignItems:"center", justifyContent:"center",
-            transition:"transform .15s",
-          }}
-          onMouseEnter={e=>(e.currentTarget.style.transform="scale(1.1)")}
-          onMouseLeave={e=>(e.currentTarget.style.transform="scale(1)")}
-        >
-          📬
-          {unread > 0 && (
-            <span style={{
-              position:"absolute", top:-2, right:-2,
-              background:C.rd, color:"#fff", borderRadius:"50%",
-              width:18, height:18, fontSize:10, fontWeight:800,
-              display:"flex", alignItems:"center", justifyContent:"center",
-              border:"2px solid #fff",
-            }}>{unread > 9 ? "9+" : unread}</span>
-          )}
-        </button>
-      )}
-
       {/* Модал: оставить заметку */}
-      {open && (
+      {openInternal && (
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",zIndex:600,display:"flex",alignItems:"flex-end",justifyContent:"flex-end",padding:80}}>
           <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:20,width:360,maxWidth:"95vw",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -167,8 +158,8 @@ export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
         </div>
       )}
 
-      {/* Модал: инбокс (только owner) */}
-      {inbox && isOwner && (
+      {/* Модал: инбокс (только owner/manager) */}
+      {inboxInternal && isOwner && (
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center"}}>
           <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:680,maxWidth:"96vw",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.2)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
@@ -181,7 +172,6 @@ export default function FeedbackButton({ sb, appUser, currentTab }: Props) {
               <button onClick={()=>setInbox(false)} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,width:30,height:30,borderRadius:"50%",cursor:"pointer",fontSize:16}}>×</button>
             </div>
 
-            {/* Фильтр */}
             <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2,marginBottom:16}}>
               {[["all","Все"],["new","🆕 Новые"],["in_progress","🔧 В работе"],["done","✅ Готово"]].map(([k,l])=>(
                 <button key={k} onClick={()=>setFilter(k)} style={{
