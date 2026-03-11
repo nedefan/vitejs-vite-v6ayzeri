@@ -80,6 +80,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const [orderF, setOrderF] = useState<any>({});
   const [recvF,  setRecvF]  = useState<any>({});
   const [payF,   setPayF]   = useState<any>({});
+  const [paySupFilter, setPaySupFilter] = useState(0);
 
   // ── role ──────────────────────────────────────────────────────────────────
   const role        = appUser?.role || "admin";
@@ -135,7 +136,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
       map[p.supplier_id].total += Number(d.amount_invoiced);
       map[p.supplier_id].delivs.push(d);
     });
-    payments.forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
+    payments.filter(p=>!p.invoice_id).forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
     return map;
   },[suppliers,deliveries,payments,packages]);
 
@@ -308,7 +309,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // TAB: ЗАКАЗЫ
   // ════════════════════════════════════════════════════════════════
   function renderOrders(){
-    const vis = isAdmin ? orders.filter(o=>o.store_id===myStoreId) : orders;
+    const vis = (isAdmin ? orders.filter(o=>o.store_id===myStoreId) : orders)
+      .filter(o=>!!pkgObj(o.package_id)); // скрываем заказы с удалённым пакетом
     return(<div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
         <button onClick={()=>{setOrderF({order_date:today,status:"sent",amount_ordered:"",expected_delivery_date:"",notes:"",created_by_role:isAdmin?"admin":"purchaser"});setOrderModal("add");}}
@@ -385,6 +387,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const prepayDeliveries = deliveries.filter(d=>d.invoice_id);
     const paidPendingInvoices = invoices.filter((inv:any)=>{
       if(inv.status!=="paid") return false;
+      if(!pkgObj(inv.package_id)) return false; // пакет удалён — не показываем
       const hasDelivery = prepayDeliveries.some((d:any)=>d.invoice_id===inv.id);
       if(hasDelivery) return false;
       if(isAdmin){ const invStoreId=inv.store_id; return !invStoreId||invStoreId===myStoreId; }
@@ -496,7 +499,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const overdue = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date<today);
     const dueWeek = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr);
     const upcoming= deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&(!d.payment_due_date||d.payment_due_date>weekStr));
-    const awaitingPayment = invoices.filter((inv:any)=>inv.status==="awaiting_payment");
+    const awaitingPayment = invoices.filter((inv:any)=>inv.status==="awaiting_payment"&&!!pkgObj(inv.package_id));
     return(<div>
       {/* ══ СЧЕТА НА ПРЕДОПЛАТУ ══ */}
       {awaitingPayment.length>0&&<div style={{background:"#fdf4ff",border:"2px solid #c4b5fd",borderRadius:14,padding:"14px 16px",marginBottom:20}}>
@@ -545,44 +548,96 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           + Оплата поставщику
         </button>
+        <select value={paySupFilter||""} onChange={e=>setPaySupFilter(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
+          <option value="">🏭 Все поставщики</option>
+          {suppliers.filter((s:any)=>s.active).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {paySupFilter>0&&<button onClick={()=>setPaySupFilter(0)} style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"5px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕ Сбросить</button>}
         <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>
           Общий долг: <strong style={{color:totalDebt>0?C.rd:C.gn}}>{fmt(totalDebt)} ₸</strong>
         </span>
       </div>
 
-      {/* Три колонки дашборда */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
-        <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.rd,marginBottom:6}}>⚠️ ПРОСРОЧЕНО</div>
-          {overdue.length===0?<div style={{fontSize:11,color:C.mu}}>Нет просрочек</div>:overdue.map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.rdBd}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.rd}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.am,marginBottom:6}}>📅 НА ЭТОЙ НЕДЕЛЕ</div>
-          {dueWeek.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:dueWeek.map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.amBd}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.am}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>📆 ПРЕДСТОЯЩИЕ</div>
-          {upcoming.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:upcoming.slice(0,5).map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.bdr}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.md}}>{fmt(d.amount_invoiced)} ₸{d.payment_due_date&&` · до ${fmtDate(d.payment_due_date)}`}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* ══ ДАШБОРД ПО ПОСТАВЩИКАМ ══ */}
+      {(()=>{
+        // Все непогашенные поставки (без предоплатных) сортируем по дате оплаты
+        const allPending = deliveries
+          .filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy"))
+          .sort((a:any,b:any)=>(a.payment_due_date||"9999")>(b.payment_due_date||"9999")?1:-1);
+
+        // Считаем баланс по каждому поставщику (оплачено минус накладные) — исключаем предоплатные платежи
+        const balanceBySup:{[id:number]:number} = {};
+        suppliers.forEach((s:any)=>{ balanceBySup[s.id]=0; });
+        payments.filter((p:any)=>!p.invoice_id).forEach((p:any)=>{ if(balanceBySup[p.supplier_id]!==undefined) balanceBySup[p.supplier_id]+=Number(p.amount); });
+        deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy"))
+          .forEach((d:any)=>{ const p=pkgObj(d.package_id); if(p&&balanceBySup[p.supplier_id]!==undefined) balanceBySup[p.supplier_id]-=Number(d.amount_invoiced); });
+
+        // Для каждой поставки определяем покрыта ли она — идём по поставщику, применяем оплаты к накладным в порядке срока
+        const coveredIds = new Set<number>();
+        const supDelivs:{[id:number]:any[]} = {};
+        allPending.forEach((d:any)=>{ const p=pkgObj(d.package_id); if(p){ if(!supDelivs[p.supplier_id])supDelivs[p.supplier_id]=[]; supDelivs[p.supplier_id].push(d); } });
+        Object.keys(supDelivs).forEach(sid=>{
+          const supId=+sid;
+          let running = payments.filter((p:any)=>p.supplier_id===supId&&!p.invoice_id).reduce((s:number,p:any)=>s+Number(p.amount),0);
+          supDelivs[supId].forEach((d:any)=>{
+            if(running>=Number(d.amount_invoiced)){ coveredIds.add(d.id); running-=Number(d.amount_invoiced); }
+            else running=0;
+          });
+        });
+
+        const activeSups = suppliers.filter((s:any)=>
+          allPending.some((d:any)=>{ const p=pkgObj(d.package_id); return p?.supplier_id===s.id; }) &&
+          (!paySupFilter || s.id===paySupFilter)
+        );
+        if(activeSups.length===0&&overdue.length===0) return null;
+
+        return(<div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+          {activeSups.map((sup:any)=>{
+            const supDelivsList = allPending.filter((d:any)=>pkgObj(d.package_id)?.supplier_id===sup.id);
+            const totalInvoiced = supDelivsList.reduce((s:number,d:any)=>s+Number(d.amount_invoiced),0);
+            const totalPaid = payments.filter((p:any)=>p.supplier_id===sup.id&&!p.invoice_id).reduce((s:number,p:any)=>s+Number(p.amount),0);
+            const remaining = totalInvoiced - totalPaid;
+            const surplus = totalPaid - totalInvoiced;
+            const allCovered = supDelivsList.every((d:any)=>coveredIds.has(d.id));
+
+            return(<div key={sup.id} style={{background:C.w,border:`2px solid ${allCovered?C.gnBd:remaining>0?C.amBd:C.bdr}`,borderRadius:12,overflow:"hidden"}}>
+              {/* Шапка поставщика */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:allCovered?C.gnBg:remaining>0?C.amBg:C.lt,flexWrap:"wrap",gap:8}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.tx}}>{sup.name}</div>
+                <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+                  <div style={{fontSize:11,color:C.mu}}>Накладных: <strong style={{color:C.tx}}>{fmt(totalInvoiced)} ₸</strong></div>
+                  <div style={{fontSize:11,color:C.mu}}>Оплачено: <strong style={{color:C.gn}}>{fmt(totalPaid)} ₸</strong></div>
+                  {allCovered
+                    ? <span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>✅ Всё закрыто{surplus>1&&` · остаток ${fmt(surplus)} ₸`}</span>
+                    : <span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>⚠️ Осталось {fmt(remaining)} ₸</span>
+                  }
+                </div>
+              </div>
+              {/* Список накладных */}
+              <div style={{padding:"8px 16px",display:"flex",flexDirection:"column",gap:6}}>
+                {supDelivsList.map((d:any)=>{
+                  const isCovered = coveredIds.has(d.id);
+                  const isOverdueD = d.payment_due_date&&d.payment_due_date<today;
+                  const isThisWeek = d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr;
+                  const tag = isOverdueD?"⚠️ Просрочено":isThisWeek?"📅 На этой неделе":"📆 Предстоящее";
+                  const tagColor = isOverdueD?C.rd:isThisWeek?C.am:C.mu;
+                  return(<div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:`1px solid ${C.lt}`,flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:150}}>
+                      <div style={{fontSize:12,fontWeight:600,color:isCovered?C.mu:C.tx,textDecoration:isCovered?"line-through":"none"}}>{pkgLabel(d.package_id)}</div>
+                      <div style={{fontSize:10,color:C.mu,marginTop:1}}>{sn(d.store_id)}{d.payment_due_date&&<span style={{color:tagColor}}> · до {fmtDate(d.payment_due_date)}</span>}</div>
+                    </div>
+                    <div style={{fontSize:12,fontWeight:700,color:isCovered?C.mu:C.tx,textDecoration:isCovered?"line-through":"none"}}>{fmt(d.amount_invoiced)} ₸</div>
+                    {isCovered
+                      ? <span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>✅ Покрыто</span>
+                      : <span style={{background:isOverdueD?C.rdBg:isThisWeek?C.amBg:C.lt,border:`1px solid ${isOverdueD?C.rdBd:isThisWeek?C.amBd:C.bdr}`,color:tagColor,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{tag}</span>
+                    }
+                  </div>);
+                })}
+              </div>
+            </div>);
+          })}
+        </div>);
+      })()}
 
       {/* Таблица долга по поставщикам */}
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
