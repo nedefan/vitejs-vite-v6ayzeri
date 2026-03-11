@@ -61,11 +61,16 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const [delOrdM,    setDelOrdM]    = useState<null|any>(null);
   const [delDelvM,   setDelDelvM]   = useState<null|any>(null);
   const [delPayM,    setDelPayM]    = useState<null|any>(null);
+  const [invoiceModal,setInvoiceModal] = useState<null|"add"|any>(null);
+  const [invoiceF,   setInvoiceF]   = useState<any>({});
+  const [delInvM,    setDelInvM]    = useState<null|any>(null);
+  const [invoices,    setInvoices]    = useState<any[]>([]);
   const [agents,     setAgents]     = useState<any[]>([]);
   const [agentPkgs,  setAgentPkgs]  = useState<any[]>([]);
   const [agentModal, setAgentModal] = useState<null|"add"|any>(null);
   const [agentF,     setAgentF]     = useState<any>({});
   const [delAgentM,  setDelAgentM]  = useState<null|any>(null);
+  const [delSchedM,  setDelSchedM]  = useState<null|any>(null);
   const [agentPkgSel,setAgentPkgSel] = useState<number[]>([]);
 
   // ── forms ─────────────────────────────────────────────────────────────────
@@ -87,7 +92,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ── load ──────────────────────────────────────────────────────────────────
   const loadAll = useCallback(async()=>{
     setLoading(true);
-    const [s,p,sc,o,d,py,ag,ap] = await Promise.all([
+    const [s,p,sc,o,d,py,ag,ap,inv] = await Promise.all([
       sb.from("sup_suppliers").select("*").order("name"),
       sb.from("sup_packages").select("*").order("name"),
       sb.from("sup_schedules").select("*"),
@@ -96,6 +101,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
       sb.from("sup_payments").select("*").order("date",{ascending:false}),
       sb.from("sup_agents").select("*").order("name"),
       sb.from("sup_agent_packages").select("*"),
+      sb.from("sup_invoices").select("*").order("invoice_date",{ascending:false}),
     ]);
     if(s.data) setSuppliers(s.data);
     if(p.data) setPackages(p.data);
@@ -105,6 +111,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     if(py.data) setPayments(py.data);
     if(ag.data) setAgents(ag.data);
     if(ap.data) setAgentPkgs(ap.data);
+    if(inv.data) setInvoices(inv.data);
     setLoading(false);
   },[]);
   useEffect(()=>{loadAll();},[loadAll]);
@@ -115,12 +122,14 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const supObj = (id:any) => suppliers.find(s=>s.id===id);
   const supByPkg = (pkgId:any) => { const p=pkgObj(pkgId); return p?supObj(p.supplier_id):null; };
   const pkgLabel = (pkgId:any) => { const p=pkgObj(pkgId); return p?`${supByPkg(pkgId)?.name||"?"} › ${p.name}`:"—"; };
+  const isPrepay  = (pkgId:any) => !!pkgObj(pkgId)?.prepayment;
+  const PrepayBadge = () => <span style={{background:"#fdf4ff",border:"1px solid #e9d5ff",color:"#7c3aed",padding:"1px 6px",borderRadius:20,fontSize:9,fontWeight:700,marginLeft:5}}>💳 ПРЕДОПЛАТА</span>;
 
   // долг по каждому поставщику (только bank deliveries received)
   const debtBySup = useMemo(()=>{
     const map:{[id:number]:{total:number,delivs:any[]}} = {};
     suppliers.forEach(s=>{ map[s.id]={total:0,delivs:[]}; });
-    deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")).forEach(d=>{
+    deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")).forEach(d=>{
       const p=pkgObj(d.package_id); if(!p)return;
       if(!map[p.supplier_id]) map[p.supplier_id]={total:0,delivs:[]};
       map[p.supplier_id].total += Number(d.amount_invoiced);
@@ -132,14 +141,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
 
   const totalDebt = Object.values(debtBySup).reduce((s:number,v:any)=>s+Math.max(0,v.total),0);
   const today = todayStr();
-  const overdueDelivs = deliveries.filter(d=>d.payment_type==="bank"&&d.status==="received"&&d.payment_due_date&&d.payment_due_date<today);
+  const overdueDelivs = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&d.status==="received"&&d.payment_due_date&&d.payment_due_date<today);
 
   const subBtn = (a:boolean)=>({background:a?C.w:"none",border:`1px solid ${a?C.bdr:"transparent"}`,borderRadius:7,cursor:"pointer" as const,padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",color:a?C.or:C.mu,boxShadow:a?"0 1px 3px rgba(0,0,0,.07)":"none"});
+  const pendingInvoicesCount = invoices.filter(inv=>inv.status==="awaiting_payment").length;
   const TABS = [
     isPurchaser&&{k:"schedule",l:"📅 График"},
     isPurchaser&&{k:"orders",  l:"📦 Заказы"},
     {k:"deliveries",l:"🚚 Поставки"},
-    isAcct&&{k:"payments",l:"💰 Оплаты"},
+    isAcct&&{k:"payments",l:`💰 Оплаты${pendingInvoicesCount>0?" ("+pendingInvoicesCount+")":""}`},
     isOwner&&{k:"refs",l:"⚙️ Справочник"},
   ].filter(Boolean) as any[];
 
@@ -256,6 +266,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                           <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>
                             {sup?.name||"?"}
                             <span style={{color:C.mu,fontWeight:400}}> › {pkg?.name||"?"}</span>
+                            {pkg?.prepayment&&<PrepayBadge/>}
                           </div>
                           <div style={{display:"flex",gap:10,flexWrap:"wrap",fontSize:11,color:C.mu}}>
                             <span>🏪 {sn(sc.store_id)}</span>
@@ -313,25 +324,46 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
             const st=STATUS_ORDER[o.status]||STATUS_ORDER.sent;
             return(<tr key={o.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
               <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(o.order_date)}</span>}/>
-              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{pkgLabel(o.package_id)}</div>{o.notes&&<div style={{fontSize:10,color:C.mu}}>{o.notes}</div>}</div>}/>
+              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{pkgLabel(o.package_id)}{isPrepay(o.package_id)&&<PrepayBadge/>}</div>{o.notes&&<div style={{fontSize:10,color:C.mu}}>{o.notes}</div>}</div>}/>
               <TD ch={<span style={{fontSize:11,color:C.md}}>{o.store_id?sn(o.store_id):<span style={{color:C.mu,fontStyle:"italic"}}>Все</span>}</span>}/>
               <TD ch={<strong style={{fontSize:12}}>{o.amount_ordered?fmt(o.amount_ordered)+" ₸":"—"}</strong>}/>
               <TD ch={<span style={{fontSize:11,color:C.md}}>{o.expected_delivery_date?fmtDate(o.expected_delivery_date):"—"}</span>}/>
               <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
               <TD ch={<div style={{display:"flex",gap:4}}>
                 <button onClick={()=>{setOrderF({...o});setOrderModal(o);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
-                {o.status==="sent"&&<button onClick={()=>{
+                {o.status==="sent"&&(()=>{
                   const pkg=pkgObj(o.package_id);
+                  if(pkg?.prepayment){
+                    // Предоплата: проверяем есть ли уже счёт
+                    const existInv=invoices.find((inv:any)=>inv.order_id===o.id);
+                    if(existInv){
+                      const isPaid=existInv.status==="paid";
+                      return <span style={{background:isPaid?C.gnBg:C.puBg,border:`1px solid ${isPaid?C.gnBd:C.puBd}`,color:isPaid?C.gn:C.pu,padding:"3px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>
+                        {isPaid?"✅ Счёт оплачен":"⏳ Ожидает оплаты"}
+                      </span>;
+                    }
+                    return <button onClick={()=>{
+                      setInvoiceF({order_id:o.id,package_id:o.package_id,supplier_id:pkg.supplier_id,
+                        store_id:o.store_id||"",invoice_date:today,invoice_number:"",
+                        amount:o.amount_ordered||"",notes:"",status:"awaiting_payment"});
+                      setInvoiceModal("add");
+                    }} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>
+                      📋 Выставить счёт
+                    </button>;
+                  }
+                  // Обычная оплата — принять как раньше
                   const daysToAdd=pkg?.payment_days||0;
                   const due=new Date(); due.setDate(due.getDate()+daysToAdd);
-                  setRecvF({order_id:o.id,package_id:o.package_id,store_id:o.store_id,delivery_date:today,
-                    invoice_number:"",amount_invoiced:o.amount_ordered||"",
-                    payment_due_date:due.toISOString().slice(0,10),
-                    payment_type:pkg?.payment_type||"bank",status:"received",notes:""});
-                  setRecvModal(o);
-                }} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
-                  🚚 Принять
-                </button>}
+                  return <button onClick={()=>{
+                    setRecvF({order_id:o.id,package_id:o.package_id,store_id:o.store_id,delivery_date:today,
+                      invoice_number:"",amount_invoiced:o.amount_ordered||"",
+                      payment_due_date:due.toISOString().slice(0,10),
+                      payment_type:pkg?.payment_type||"bank",status:"received",notes:""});
+                    setRecvModal(o);
+                  }} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                    🚚 Принять
+                  </button>;
+                })()}
                 <button onClick={()=>setDelOrdM(o)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
               </div>}/>
             </tr>);
@@ -346,15 +378,53 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ════════════════════════════════════════════════════════════════
   function renderDeliveries(){
     const vis = isAdmin ? deliveries.filter(d=>d.store_id===myStoreId) : deliveries;
-    const bank = vis.filter(d=>d.payment_type==="bank");
-    const cash = vis.filter(d=>d.payment_type==="cash");
+    const bank = vis.filter(d=>d.payment_type==="bank"&&!d.invoice_id);
+    const cash = vis.filter(d=>d.payment_type==="cash"&&!d.invoice_id);
+    // Оплаченные счета ожидающие прихода
+    const paidInvoiceIds = new Set(invoices.filter(inv=>inv.status==="paid").map((inv:any)=>inv.id));
+    const prepayDeliveries = deliveries.filter(d=>d.invoice_id);
+    const paidPendingInvoices = invoices.filter((inv:any)=>{
+      if(inv.status!=="paid") return false;
+      const hasDelivery = prepayDeliveries.some((d:any)=>d.invoice_id===inv.id);
+      if(hasDelivery) return false;
+      if(isAdmin){ const invStoreId=inv.store_id; return !invStoreId||invStoreId===myStoreId; }
+      return true;
+    });
+    const prepayReceived = isAdmin
+      ? prepayDeliveries.filter((d:any)=>d.store_id===myStoreId)
+      : prepayDeliveries;
     return(<div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        <button onClick={()=>{setRecvF({delivery_date:today,status:"received",payment_type:"bank",payment_due_date:"",invoice_number:"",amount_invoiced:"",notes:""});setRecvModal("new");}}
+        {!isAdmin&&<button onClick={()=>{setRecvF({delivery_date:today,status:"received",payment_type:"bank",payment_due_date:"",invoice_number:"",amount_invoiced:"",notes:""});setRecvModal("new");}}
           style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           + Поставка
-        </button>
+        </button>}
       </div>
+      {/* Секция предоплаты - оплачено, ожидает прихода */}
+      {paidPendingInvoices.length>0&&<div style={{background:"#fdf4ff",border:"1px solid #e9d5ff",borderRadius:12,padding:"12px 16px",marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.pu,marginBottom:10}}>💜 Оплачено — ожидает прихода товара ({paidPendingInvoices.length})</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {paidPendingInvoices.map((inv:any)=>{
+            const pkg=pkgObj(inv.package_id);
+            const sup=supObj(inv.supplier_id);
+            return(<div key={inv.id} style={{background:C.w,border:"1px solid #e9d5ff",borderRadius:8,padding:"10px 14px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{fontWeight:700,fontSize:12}}>{sup?.name||"?"} › {pkg?.name||"?"}<PrepayBadge/></div>
+                <div style={{fontSize:11,color:C.mu,marginTop:2}}>Счёт №{inv.invoice_number||"—"} · {fmtDate(inv.invoice_date)} · <strong>{fmt(inv.amount)} ₸</strong></div>
+                {inv.store_id&&<div style={{fontSize:10,color:C.mu}}>🏪 {sn(inv.store_id)}</div>}
+              </div>
+              <button onClick={()=>{
+                setRecvF({invoice_id:inv.id,order_id:inv.order_id,package_id:inv.package_id,
+                  store_id:inv.store_id||"",delivery_date:today,invoice_number:inv.invoice_number||"",
+                  amount_invoiced:inv.amount,payment_type:"bank",status:"received",notes:""});
+                setRecvModal("prepay");
+              }} style={{background:C.pu,border:"none",color:"#fff",padding:"6px 14px",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                🚚 Принять товар
+              </button>
+            </div>);
+          })}
+        </div>
+      </div>}
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto",marginBottom:16}}>
         <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>🏦 Безналичные поставки</div>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:700}}>
@@ -375,6 +445,27 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           })}</tbody>
         </table>
       </div>
+      {prepayReceived.length>0&&<div style={{background:C.w,border:"1px solid #e9d5ff",borderRadius:12,overflow:"auto",marginBottom:16}}>
+        <div style={{padding:"8px 14px",background:"#fdf4ff",borderBottom:"1px solid #e9d5ff",fontSize:11,fontWeight:700,color:C.pu}}>💜 Предоплата — принятые поставки</div>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+          <thead><tr><TH ch="Дата"/><TH ch="Поставщик › Пакет"/><TH ch="Магазин"/><TH ch="Накладная"/><TH ch="Оплачено"/><TH ch="Получено"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+          <tbody>{prepayReceived.map((d:any,i:number)=>{
+            const inv=invoices.find((inv:any)=>inv.id===d.invoice_id);
+            const diff=inv?Number(d.amount_invoiced)-Number(inv.amount):0;
+            const st=STATUS_DELIV[d.status]||STATUS_DELIV.received;
+            return(<tr key={d.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+              <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(d.delivery_date)}</span>}/>
+              <TD ch={<div style={{fontWeight:600,fontSize:12}}>{pkgLabel(d.package_id)}<PrepayBadge/></div>}/>
+              <TD ch={<span style={{fontSize:11}}>{sn(d.store_id)}</span>}/>
+              <TD ch={<span style={{fontFamily:"monospace",fontSize:11,color:C.md}}>{d.invoice_number||"—"}</span>}/>
+              <TD ch={<span style={{fontSize:11,color:C.mu}}>{inv?fmt(inv.amount)+" ₸":"—"}</span>}/>
+              <TD ch={<span style={{fontWeight:700,fontSize:12,color:Math.abs(diff)>1?C.am:C.gn}}>{fmt(d.amount_invoiced)} ₸{Math.abs(diff)>1&&<span style={{fontSize:10,marginLeft:4}}>({diff>0?"+":""}{fmt(diff)})</span>}</span>}/>
+              <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
+              <TD ch={<button onClick={()=>setDelDelvM(d)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>}/>
+            </tr>);
+          })}</tbody>
+        </table>
+      </div>}
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
         <div style={{padding:"8px 14px",background:C.lt,borderBottom:`1px solid ${C.bdr}`,fontSize:11,fontWeight:700,color:C.md}}>💵 Наличные поставки</div>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
@@ -402,10 +493,53 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   function renderPayments(){
     const week = new Date(); week.setDate(week.getDate()+7);
     const weekStr = week.toISOString().slice(0,10);
-    const overdue = deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date<today);
-    const dueWeek = deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr);
-    const upcoming= deliveries.filter(d=>d.payment_type==="bank"&&(d.status==="received"||d.status==="discrepancy")&&(!d.payment_due_date||d.payment_due_date>weekStr));
+    const overdue = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date<today);
+    const dueWeek = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr);
+    const upcoming= deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&(!d.payment_due_date||d.payment_due_date>weekStr));
+    const awaitingPayment = invoices.filter((inv:any)=>inv.status==="awaiting_payment");
     return(<div>
+      {/* ══ СЧЕТА НА ПРЕДОПЛАТУ ══ */}
+      {awaitingPayment.length>0&&<div style={{background:"#fdf4ff",border:"2px solid #c4b5fd",borderRadius:14,padding:"14px 16px",marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <div style={{fontSize:16,fontWeight:800,color:C.pu}}>💜 Счета к оплате (предоплата)</div>
+          <span style={{background:C.pu,color:"#fff",borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:700}}>{awaitingPayment.length}</span>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {awaitingPayment.map((inv:any)=>{
+            const pkg=pkgObj(inv.package_id);
+            const sup=supObj(inv.supplier_id);
+            return(<div key={inv.id} style={{background:C.w,border:"1px solid #e9d5ff",borderRadius:10,padding:"10px 14px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{fontWeight:700,fontSize:13}}>{sup?.name||"?"} › {pkg?.name||"?"}</div>
+                <div style={{fontSize:11,color:C.mu,marginTop:2}}>
+                  Счёт №<strong>{inv.invoice_number||"—"}</strong> от {fmtDate(inv.invoice_date)}
+                  {inv.store_id&&<span> · 🏪 {sn(inv.store_id)}</span>}
+                  {inv.notes&&<span> · {inv.notes}</span>}
+                </div>
+              </div>
+              <div style={{fontSize:18,fontWeight:800,color:C.pu,whiteSpace:"nowrap"}}>{fmt(inv.amount)} ₸</div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={async()=>{
+                  setSaving(true);
+                  // Помечаем счёт оплаченным
+                  await sb.from("sup_invoices").update({status:"paid",paid_at:new Date().toISOString()}).eq("id",inv.id);
+                  // Создаём платёж
+                  const{data:pay}=await sb.from("sup_payments").insert({
+                    supplier_id:inv.supplier_id,date:today,amount:inv.amount,
+                    note:`Предоплата: счёт №${inv.invoice_number||inv.id}`,invoice_id:inv.id
+                  }).select().single();
+                  setInvoices(invoices.map((x:any)=>x.id===inv.id?{...x,status:"paid",paid_at:new Date().toISOString()}:x));
+                  if(pay) setPayments([pay,...payments]);
+                  setSaving(false);
+                }} disabled={saving} style={{background:C.pu,border:"none",color:"#fff",padding:"7px 16px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",opacity:saving?0.7:1}}>
+                  💳 Оплатить
+                </button>
+                <button onClick={()=>setDelInvM(inv)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"7px 10px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>🗑</button>
+              </div>
+            </div>);
+          })}
+        </div>
+      </div>}
       <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
         <button onClick={()=>{setPayF({date:today,amount:"",note:""});setPayModal(true);}}
           style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -566,7 +700,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
               return(<tr key={p.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:p.active?1:0.55}}>
                 <TD ch={<span style={{fontSize:11,color:C.md}}>{sup?.name||"—"}</span>}/>
                 <TD ch={<span style={{fontWeight:600,fontSize:12}}>{p.name}</span>}/>
-                <TD ch={p.payment_type==="bank"?<Bdg c={C.bl} bg={C.blBg} bd={C.blBd} ch="🏦 Банк"/>:<Bdg c={C.am} bg={C.amBg} bd={C.amBd} ch="💵 Нал"/>}/>
+                <TD ch={<div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{p.payment_type==="bank"?<Bdg c={C.bl} bg={C.blBg} bd={C.blBd} ch="🏦 Банк"/>:<Bdg c={C.am} bg={C.amBg} bd={C.amBd} ch="💵 Нал"/>}{p.prepayment&&<PrepayBadge/>}</div>}/>
                 <TD ch={<span style={{fontSize:12}}>{p.payment_type==="bank"?`${p.payment_days} дн.`:"—"}</span>}/>
                 <TD ch={<span style={{fontSize:11,color:C.mu}}>{p.notes||"—"}</span>}/>
                 <TD ch={<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
@@ -599,7 +733,10 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                 <TD ch={<span style={{fontSize:11,color:C.bl}}>{od.map((d:number)=>DAY[d]).join(", ")||"—"}</span>}/>
                 <TD ch={<span style={{fontSize:11,color:C.gn}}>{dd.map((d:number)=>DAY[d]).join(", ")||"—"}</span>}/>
                 <TD ch={<Bdg c={sc.active?C.gn:C.mu} bg={sc.active?C.gnBg:C.lt} bd={sc.active?C.gnBd:C.bdr} ch={sc.active?"Активно":"Откл."}/>}/>
-                <TD ch={<button onClick={()=>{setSchedF({...sc,order_days:od,delivery_days:dd});setSchedModal(sc);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>}/>
+                <TD ch={<div style={{display:"flex",gap:4}}>
+                  <button onClick={()=>{setSchedF({...sc,order_days:od,delivery_days:dd});setSchedModal(sc);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+                  <button onClick={()=>setDelSchedM(sc)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
+                </div>}/>
               </tr>);
             })}</tbody>
           </table>
@@ -619,8 +756,9 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   }
   async function savePackage(){
     if(!pkgF.name?.trim()||!pkgF.supplier_id)return; setSaving(true);
-    if(pkgModal==="add"){const{data}=await sb.from("sup_packages").insert({...pkgF}).select().single();if(data)setPackages([...packages,data]);}
-    else{const{data}=await sb.from("sup_packages").update({...pkgF}).eq("id",pkgF.id).select().single();if(data)setPackages(packages.map((p:any)=>p.id===data.id?data:p));}
+    const pkgPayload={...pkgF,prepayment:!!pkgF.prepayment};
+    if(pkgModal==="add"){const{data}=await sb.from("sup_packages").insert(pkgPayload).select().single();if(data)setPackages([...packages,data]);}
+    else{const{data}=await sb.from("sup_packages").update(pkgPayload).eq("id",pkgF.id).select().single();if(data)setPackages(packages.map((p:any)=>p.id===data.id?data:p));}
     setSaving(false);setPkgModal(null);
   }
   async function deleteSup(sup:any){
@@ -657,6 +795,11 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   async function deleteDelivery(d:any){
     await sb.from("sup_deliveries").delete().eq("id",d.id);
     setDeliveries(deliveries.filter((x:any)=>x.id!==d.id));
+    // Если предоплатная поставка — возвращаем счёт в статус "ожидает прихода"
+    if(d.invoice_id){
+      await sb.from("sup_invoices").update({status:"paid"}).eq("id",d.invoice_id);
+      setInvoices(invoices.map((inv:any)=>inv.id===d.invoice_id?{...inv,status:"paid"}:inv));
+    }
     setDelDelvM(null);
   }
   async function deletePayment(p:any){
@@ -699,6 +842,11 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     else{const{data}=await sb.from("sup_schedules").update(payload).eq("id",schedF.id).select().single();if(data)setSchedules(schedules.map((s:any)=>s.id===data.id?data:s));}
     setSaving(false);setSchedModal(null);
   }
+  async function deleteSchedule(sc:any){
+    await sb.from("sup_schedules").delete().eq("id",sc.id);
+    setSchedules(schedules.filter((s:any)=>s.id!==sc.id));
+    setDelSchedM(null);
+  }
   async function saveOrder(){
     if(!orderF.package_id)return; setSaving(true);
     const payload={...orderF,amount_ordered:Number(orderF.amount_ordered)||0,store_id:orderF.store_id||null};
@@ -724,6 +872,24 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const{data}=await sb.from("sup_payments").insert({...payF,amount:Number(payF.amount)}).select().single();
     if(data) setPayments([data,...payments]);
     setSaving(false);setPayModal(false);
+  }
+  async function saveInvoice(){
+    if(!invoiceF.package_id||!invoiceF.supplier_id||!invoiceF.amount)return; setSaving(true);
+    const payload={...invoiceF,amount:Number(invoiceF.amount),store_id:invoiceF.store_id||null,order_id:invoiceF.order_id||null};
+    const{data}=await sb.from("sup_invoices").insert(payload).select().single();
+    if(data){
+      setInvoices([data,...invoices]);
+      // Обновляем статус заказа если привязан
+      if(invoiceF.order_id){
+        await sb.from("sup_orders").update({status:"sent"}).eq("id",invoiceF.order_id);
+      }
+    }
+    setSaving(false);setInvoiceModal(null);
+  }
+  async function deleteInvoice(inv:any){
+    await sb.from("sup_invoices").delete().eq("id",inv.id);
+    setInvoices(invoices.filter((x:any)=>x.id!==inv.id));
+    setDelInvM(null);
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -769,6 +935,10 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           <div style={{fontSize:16,fontWeight:800,color:overdueDelivs.length>0?C.rd:C.mu}}>{overdueDelivs.length}</div>
           <div style={{fontSize:9,color:overdueDelivs.length>0?C.rd:C.mu,fontWeight:700}}>ПРОСРОЧЕНО</div>
         </div>
+        {pendingInvoicesCount>0&&<div style={{background:"#fdf4ff",border:"2px solid #c4b5fd",borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:90}}>
+          <div style={{fontSize:16,fontWeight:800,color:C.pu}}>{pendingInvoicesCount}</div>
+          <div style={{fontSize:9,color:C.pu,fontWeight:700}}>💳 К ОПЛАТЕ</div>
+        </div>}
         <div style={{background:totalDebt>0?C.amBg:C.gnBg,border:`1px solid ${totalDebt>0?C.amBd:C.gnBd}`,borderRadius:9,padding:"8px 14px",textAlign:"center",minWidth:110}}>
           <div style={{fontSize:16,fontWeight:800,color:totalDebt>0?C.am:C.gn}}>{fmt(totalDebt)} ₸</div>
           <div style={{fontSize:9,color:totalDebt>0?C.am:C.gn,fontWeight:700}}>ДОЛГ</div>
@@ -819,6 +989,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
             </div>
           </div>
           {pkgF.payment_type==="bank"&&<div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ОТСРОЧКА (ДНЕЙ)</div><input type="number" value={pkgF.payment_days||""} onChange={e=>setPkgF({...pkgF,payment_days:+e.target.value})} style={I()}/></div>}
+          <div style={{background:pkgF.prepayment?"#fdf4ff":C.lt,border:`2px solid ${pkgF.prepayment?"#c4b5fd":C.bdr}`,borderRadius:9,padding:"10px 12px"}}>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+              <input type="checkbox" checked={pkgF.prepayment||false} onChange={e=>setPkgF({...pkgF,prepayment:e.target.checked})} style={{cursor:"pointer",width:15,height:15}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:pkgF.prepayment?C.pu:C.md}}>💳 Предоплата</div>
+                <div style={{fontSize:10,color:C.mu}}>Сначала оплата бухгалтером, потом приход товара</div>
+              </div>
+            </label>
+          </div>
           <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>УСЛОВИЯ / ЗАМЕТКИ</div><input value={pkgF.notes||""} onChange={e=>setPkgF({...pkgF,notes:e.target.value})} style={I()}/></div>
           <div><label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox" checked={pkgF.active||false} onChange={e=>setPkgF({...pkgF,active:e.target.checked})}/>Активен</label></div>
         </div>
@@ -999,7 +1178,20 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         </div>
       </div>
     </div>}
-    {/* МОДАЛ: УДАЛЕНИЕ АГЕНТА */}
+    {/* МОДАЛ: УДАЛЕНИЕ РАСПИСАНИЯ */}
+    {delSchedM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:340,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить расписание?</div>
+        <div style={{fontSize:12,color:C.md,fontWeight:600,marginBottom:4}}>{pkgLabel(delSchedM.package_id)}</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:14}}>🏪 {sn(delSchedM.store_id)}</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelSchedM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteSchedule(delSchedM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
+  {/* МОДАЛ: УДАЛЕНИЕ АГЕНТА */}
     {delAgentM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
         <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
@@ -1032,7 +1224,10 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delDelvM.package_id)}</div>
         <div style={{fontSize:11,color:C.mu,marginBottom:4}}>{sn(delDelvM.store_id)} · {fmtDate(delDelvM.delivery_date)}</div>
         <div style={{fontSize:12,fontWeight:700,color:C.rd,marginBottom:10}}>{fmt(delDelvM.amount_invoiced)} ₸{delDelvM.invoice_number&&` · №${delDelvM.invoice_number}`}</div>
-        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>⚠️ Удаление поставки не отменяет оплату поставщику.</div>
+        {delDelvM.invoice_id
+          ? <div style={{background:"#fdf4ff",border:"1px solid #e9d5ff",borderRadius:8,padding:"8px 12px",fontSize:11,color:C.pu,marginBottom:14,textAlign:"left"}}>💜 Предоплатная поставка — после удаления счёт вернётся в статус «ожидает прихода», оплата сохранится.</div>
+          : <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>⚠️ Удаление поставки не отменяет оплату поставщику.</div>
+        }
         <div style={{display:"flex",gap:7}}>
           <button onClick={()=>setDelDelvM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={()=>deleteDelivery(delDelvM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
@@ -1050,6 +1245,53 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         <div style={{display:"flex",gap:7}}>
           <button onClick={()=>setDelPayM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={()=>deletePayment(delPayM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+        </div>
+      </div>
+    </div>}
+  {/* МОДАЛ: СЧЁТ НА ПРЕДОПЛАТУ */}
+    {invoiceModal&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:C.w,border:"2px solid #c4b5fd",borderRadius:14,padding:20,width:440,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:4,color:C.pu}}>💳 Счёт на предоплату</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:14}}>Поставщик выставил счёт — бухгалтер увидит его в разделе Оплаты</div>
+        <div style={{display:"flex",flexDirection:"column",gap:9}}>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПАКЕТ</div>
+            <select value={invoiceF.package_id||""} onChange={e=>{const p=pkgObj(+e.target.value);setInvoiceF({...invoiceF,package_id:+e.target.value,supplier_id:p?.supplier_id||""});}} style={I()}>
+              <option value="">— Выбрать —</option>
+              {packages.filter((p:any)=>p.active&&p.prepayment).map((p:any)=>{const s=supObj(p.supplier_id);return<option key={p.id} value={p.id}>{s?.name} › {p.name}</option>;})}
+            </select>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>МАГАЗИН (если один)</div>
+            <select value={invoiceF.store_id||""} onChange={e=>setInvoiceF({...invoiceF,store_id:e.target.value?+e.target.value:""})} style={I()}>
+              <option value="">— Все / не указан —</option>
+              {stores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+            <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>НОМЕР СЧЁТА</div><input value={invoiceF.invoice_number||""} onChange={e=>setInvoiceF({...invoiceF,invoice_number:e.target.value})} placeholder="№ счёта" style={I()}/></div>
+            <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ДАТА СЧЁТА</div><input type="date" value={invoiceF.invoice_date||today} onChange={e=>setInvoiceF({...invoiceF,invoice_date:e.target.value})} style={I()}/></div>
+          </div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>СУММА (₸)</div><input type="number" value={invoiceF.amount||""} onChange={e=>setInvoiceF({...invoiceF,amount:e.target.value})} placeholder="0" style={I({fontSize:16,fontWeight:700})}/></div>
+          <div><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>ПРИМЕЧАНИЕ</div><input value={invoiceF.notes||""} onChange={e=>setInvoiceF({...invoiceF,notes:e.target.value})} style={I()}/></div>
+        </div>
+        <div style={{display:"flex",gap:7,marginTop:14}}>
+          <button onClick={()=>setInvoiceModal(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={saveInvoice} disabled={saving||!invoiceF.package_id||!invoiceF.amount} style={{flex:1,background:C.pu,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.7:1}}>📋 Выставить счёт</button>
+        </div>
+      </div>
+    </div>}
+  {/* МОДАЛ: УДАЛЕНИЕ СЧЁТА */}
+    {delInvM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:22,width:320,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.14)",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить счёт?</div>
+        <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delInvM.package_id)}</div>
+        <div style={{fontSize:13,fontWeight:700,color:C.pu,marginBottom:10}}>{fmt(delInvM.amount)} ₸ · №{delInvM.invoice_number||"—"}</div>
+        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"8px 12px",fontSize:11,color:C.am,marginBottom:14,textAlign:"left"}}>⚠️ Удаление возможно только до оплаты.</div>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setDelInvM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+          <button onClick={()=>deleteInvoice(delInvM)} disabled={delInvM.status==="paid"} style={{flex:1,background:delInvM.status==="paid"?C.mu:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:delInvM.status==="paid"?"default":"pointer",fontFamily:"inherit"}}>
+            {delInvM.status==="paid"?"Уже оплачен":"Удалить"}
+          </button>
         </div>
       </div>
     </div>}

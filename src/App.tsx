@@ -98,9 +98,9 @@ async function exportStorePDF(params) {
     let base=0,variable=0;
     if(p.pay_type==='hourly')base=h*(rec.hours||0);
     else if(p.pay_type==='daily')base=d;
-    else if(p.pay_type==='revenue')variable=(dayRev*pct)/100;
-    else if(p.pay_type==='hr'){base=h*(rec.hours||0);variable=(dayRev*pct)/100;}
-    else if(p.pay_type==='dr'){base=d;variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='revenue'){if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='hr'){base=h*(rec.hours||0);if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='dr'){base=d;if(!rec.no_pct)variable=(dayRev*pct)/100;}
     return{base:Math.round(base),variable:Math.round(variable),bonus:rec.bonus||0,total:Math.round(base+variable+(rec.bonus||0))};
   }
 
@@ -191,9 +191,9 @@ async function exportEmpReport(params) {
     let base=0,variable=0;
     if(p.pay_type==='hourly')base=h*(rec.hours||0);
     else if(p.pay_type==='daily')base=d;
-    else if(p.pay_type==='revenue')variable=(dayRev*pct)/100;
-    else if(p.pay_type==='hr'){base=h*(rec.hours||0);variable=(dayRev*pct)/100;}
-    else if(p.pay_type==='dr'){base=d;variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='revenue'){if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='hr'){base=h*(rec.hours||0);if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='dr'){base=d;if(!rec.no_pct)variable=(dayRev*pct)/100;}
     return{base:Math.round(base),variable:Math.round(variable),bonus:rec.bonus||0,total:Math.round(base+variable+(rec.bonus||0))};
   }
 
@@ -265,9 +265,9 @@ async function exportPayroll(params) {
     let base=0,variable=0;
     if(p.pay_type==='hourly')base=h*(rec.hours||0);
     else if(p.pay_type==='daily')base=d;
-    else if(p.pay_type==='revenue')variable=(dayRev*pct)/100;
-    else if(p.pay_type==='hr'){base=h*(rec.hours||0);variable=(dayRev*pct)/100;}
-    else if(p.pay_type==='dr'){base=d;variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='revenue'){if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='hr'){base=h*(rec.hours||0);if(!rec.no_pct)variable=(dayRev*pct)/100;}
+    else if(p.pay_type==='dr'){base=d;if(!rec.no_pct)variable=(dayRev*pct)/100;}
     return{base:Math.round(base),variable:Math.round(variable),bonus:rec.bonus||0,total:Math.round(base+variable+(rec.bonus||0))};
   }
 
@@ -392,9 +392,9 @@ function calcParts(rec, pos, revMap) {
   let base = 0, variable = 0;
   if (p.pay_type === "hourly")  base = h * (rec.hours||0);
   else if (p.pay_type === "daily")  base = d;
-  else if (p.pay_type === "revenue") variable = (dayRev*pct)/100;
-  else if (p.pay_type === "hr") { base = h*(rec.hours||0); variable = (dayRev*pct)/100; }
-  else if (p.pay_type === "dr") { base = d; variable = (dayRev*pct)/100; }
+  else if (p.pay_type === "revenue") { if (!rec.no_pct) variable = (dayRev*pct)/100; }
+  else if (p.pay_type === "hr") { base = h*(rec.hours||0); if (!rec.no_pct) variable = (dayRev*pct)/100; }
+  else if (p.pay_type === "dr") { base = d; if (!rec.no_pct) variable = (dayRev*pct)/100; }
   const bonus = rec.bonus || 0;
   return { base:Math.round(base), variable:Math.round(variable), bonus, total:Math.round(base+variable+bonus) };
 }
@@ -465,7 +465,7 @@ export default function App() {
   const [store, setStore] = useState(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0,10));
   const [addM, setAddM] = useState(false);
-  const [nr, setNr] = useState({emp_id:"",pos_id:"",hours:14,ovr_val:"",bonus:0,comment:"",showOvr:false,showHours:false});
+  const [nr, setNr] = useState({emp_id:"",pos_id:"",hours:14,ovr_val:"",bonus:0,comment:"",showOvr:false,showHours:false,no_pct:false});
   const [editId, setEditId] = useState(null);
   const [er, setEr] = useState(null);
   const [showAllEmps, setShowAllEmps] = useState(false);
@@ -795,7 +795,7 @@ export default function App() {
     const empPosId = firstEmp?.pos_id;
     const posId = avPos.find(p => p.id === empPosId) ? empPosId : (avPos[0]?.id || "");
     setShowAllEmps(false);
-    setNr({emp_id:empId, pos_id:posId, hours:autoHours(store), ovr_val:"", bonus:0, comment:"", showOvr:false, showHours:false});
+    setNr({emp_id:empId, pos_id:posId, hours:autoHours(store), ovr_val:"", bonus:0, comment:"", showOvr:false, showHours:false, no_pct:false});
     setAddM(true);
   }
 
@@ -814,7 +814,7 @@ export default function App() {
     const { data, error } = await sb.from("shifts").insert({
       date, store_id:store, emp_id:+nr.emp_id, pos_id:+nr.pos_id,
       hours:+nr.hours||0, ovr_val:nr.ovr_val!==""?+nr.ovr_val:null,
-      bonus:+nr.bonus||0, comment:nr.comment||""
+      bonus:+nr.bonus||0, comment:nr.comment||"", no_pct:nr.no_pct||false
     }).select().single();
     if (!error && data) setShifts([data, ...shifts]);
     setSaving(false);
@@ -826,7 +826,7 @@ export default function App() {
     setSaving(true);
     const { data, error } = await sb.from("shifts").update({
       emp_id:+er.emp_id, pos_id:+er.pos_id, hours:+er.hours||0,
-      ovr_val:er.ovr_val!==""?+er.ovr_val:null, bonus:+er.bonus||0, comment:er.comment||""
+      ovr_val:er.ovr_val!==""?+er.ovr_val:null, bonus:+er.bonus||0, comment:er.comment||"", no_pct:er.no_pct||false
     }).eq("id", editId).select().single();
     if (!error && data) setShifts(shifts.map(s => s.id===editId ? data : s));
     setSaving(false);
@@ -841,7 +841,7 @@ export default function App() {
   function openEdit(rec) {
     setEditId(rec.id);
     setEr({emp_id:rec.emp_id, pos_id:rec.pos_id, hours:rec.hours,
-           ovr_val:rec.ovr_val!=null?rec.ovr_val:"", bonus:rec.bonus||0, comment:rec.comment||"", showOvr:rec.ovr_val!=null, showHours:false});
+           ovr_val:rec.ovr_val!=null?rec.ovr_val:"", bonus:rec.bonus||0, comment:rec.comment||"", showOvr:rec.ovr_val!=null, showHours:false, no_pct:rec.no_pct||false});
   }
 
   const prevSal = () => calcSal({...nr, emp_id:+nr.emp_id, pos_id:+nr.pos_id, hours:+nr.hours, ovr_val:nr.ovr_val!==""?+nr.ovr_val:null, bonus:+nr.bonus, store_id:store, date}, positions, revenue);
@@ -1122,7 +1122,7 @@ export default function App() {
                     <TD ch="—" s={{color:C.mu}}/>
                     <TD ch={<div style={{display:"flex",alignItems:"center",gap:4}}>{er.showHours?<input type="number" value={er.hours} onChange={e=>setEr({...er,hours:e.target.value})} style={I({width:55})}/>:<span>{er.hours}ч</span>}<button onClick={()=>setEr({...er,showHours:!er.showHours})} style={{background:"none",border:"none",cursor:"pointer",fontSize:10,color:C.mu}}>{er.showHours?"✓":"✎"}</button></div>}/>
                     <TD ch={<div style={{display:"flex",alignItems:"center",gap:4}}>{er.showOvr?<input type="number" step="0.1" value={er.ovr_val} onChange={e=>setEr({...er,ovr_val:e.target.value})} style={I({width:80})}/>:<span style={{fontSize:11,color:C.md}}>{er.ovr_val?`${er.ovr_val}${isRevB?"%":"₸"}`:"авто"}</span>}<button onClick={()=>setEr({...er,showOvr:!er.showOvr})} style={{background:"none",border:"none",cursor:"pointer",fontSize:10,color:C.mu}}>{er.showOvr?"✓":"✎"}</button></div>}/>
-                    <TD ch="—" s={{color:C.mu}}/>
+                    <TD ch={(()=>{const _p2=positions.find(x=>x.id===+er.pos_id);const _hv2=_p2&&(_p2.pay_type==="revenue"||_p2.pay_type==="hr"||_p2.pay_type==="dr");return _hv2?(<button onClick={()=>setEr({...er,no_pct:!er.no_pct})} title={er.no_pct?"% отключён для этой смены":"% начисляется"} style={{background:er.no_pct?C.amBg:C.gnBg,border:`1px solid ${er.no_pct?C.amBd:C.gnBd}`,color:er.no_pct?C.am:C.gn,padding:"3px 9px",borderRadius:20,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{er.no_pct?"❌ без %":"✅ с %"}</button>):<span style={{color:C.mu,fontSize:10}}>—</span>;})()}/>
                     <TD ch={<input type="number" value={er.bonus} onChange={e=>setEr({...er,bonus:e.target.value})} style={I({width:75})}/>}/>
                     <TD ch="—" s={{color:C.mu}}/>
                     <TD ch={<input type="text" value={er.comment} onChange={e=>setEr({...er,comment:e.target.value})} style={I({width:85})}/>}/>
@@ -1136,7 +1136,7 @@ export default function App() {
                     <TD ch={isDop?<Bdg c={C.pu} bg={C.puBg} bd={C.puBd} ch="Из другого"/>:<span style={{color:C.mu,fontSize:10}}>Свой</span>}/>
                     <TD ch={<span style={{color:C.md}}>{rec.hours}ч</span>}/>
                     <TD ch={pt.base>0?<span style={{fontWeight:600,color:C.bl}}>{fmt(pt.base)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
-                    <TD ch={pt.variable>0?<span style={{fontWeight:600,color:C.pu}}>{fmt(pt.variable)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
+                    <TD ch={rec.no_pct&&isRevB?<span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700}}>откл.</span>:pt.variable>0?<span style={{fontWeight:600,color:C.pu}}>{fmt(pt.variable)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
                     <TD ch={<span style={{color:pt.bonus?C.gn:C.mu}}>{pt.bonus?`+${pt.bonus.toLocaleString()} ₸`:"—"}</span>}/>
                     <TD ch={<span style={{fontWeight:800,color:C.gn,fontSize:13}}>{fmt(pt.total)} ₸</span>}/>
                     <TD ch={<span style={{color:C.mu,fontSize:10}}>{rec.comment||"—"}</span>}/>
@@ -1769,6 +1769,10 @@ export default function App() {
             </div>
             {nr.showHours?<input type="number" min="0" max="24" value={nr.hours} onChange={e=>setNr({...nr,hours:e.target.value})} style={I()}/>:<div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:6,padding:"6px 9px",fontSize:12,color:C.md}}>{nr.hours} ч <span style={{fontSize:10,color:C.mu}}>({sn(store)}: {stObj(store)?.open}–{stObj(store)?.close})</span></div>}
           </div>
+          {(()=>{const _p=positions.find(x=>x.id===+nr.pos_id);const _hv=_p&&(_p.pay_type==="revenue"||_p.pay_type==="hr"||_p.pay_type==="dr");return _hv?(<div style={{background:nr.no_pct?C.amBg:C.gnBg,border:`1px solid ${nr.no_pct?C.amBd:C.gnBd}`,borderRadius:8,padding:"9px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:0}}>
+            <div><div style={{fontSize:11,fontWeight:700,color:nr.no_pct?C.am:C.gn}}>% от выручки в эту смену</div><div style={{fontSize:10,color:C.mu,marginTop:1}}>{nr.no_pct?"не начисляется":"начисляется как обычно"}</div></div>
+            <button onClick={()=>setNr({...nr,no_pct:!nr.no_pct})} style={{background:nr.no_pct?C.amBg:C.gn,border:`1px solid ${nr.no_pct?C.am:C.gnBd}`,color:nr.no_pct?C.am:"#fff",padding:"5px 14px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0,whiteSpace:"nowrap"}}>{nr.no_pct?"❌ Выкл.":"✅ Вкл."}</button>
+          </div>):null;})()}
           <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>БОНУС ₸</div><input type="number" min="0" value={nr.bonus} onChange={e=>setNr({...nr,bonus:e.target.value})} style={I()}/></div>
           <div>
             <button onClick={()=>setNr({...nr,showOvr:!nr.showOvr,ovr_val:""})} style={{background:"none",border:"none",cursor:"pointer",fontSize:10,color:nr.showOvr?C.rd:C.mu,fontFamily:"inherit",padding:0,textDecoration:"underline"}}>{nr.showOvr?"✕ убрать ручную ставку":"⚙ изменить ставку вручную"}</button>
