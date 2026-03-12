@@ -16,7 +16,8 @@ const sb = createClient(SUPA_URL, SUPA_KEY);
 const ROLE_LABELS = { owner:"👑 Владелец", manager:"🏪 Управляющий", admin:"📋 Администратор" };
 
 // ══ Система прав доступа ══
-// permissions JSON: { shifts:0-3, reports:0-3, suppliers:0-3, debts:0-3, refs:0-3 }
+// permissions JSON — Персонал: shifts, reports, debts, refs
+//                  — Закупки:  sup_schedule, sup_orders, sup_deliveries, sup_payments, sup_refs
 // 0=нет, 1=просмотр, 2=редактирование, 3=полный(+удаление)
 function getPerm(user, mod) {
   if (!user) return 0;
@@ -1583,7 +1584,9 @@ export default function App() {
   // Фильтруем вкладки по роли
   // Флаги доступа
   const isOwner      = role==="owner" || role==="manager";
-  const canSuppliers = role==="owner" || canView(appUser,"suppliers");
+  const canSuppliers = role==="owner" || canView(appUser,"suppliers")
+    || canView(appUser,"sup_schedule") || canView(appUser,"sup_orders")
+    || canView(appUser,"sup_deliveries") || canView(appUser,"sup_payments") || canView(appUser,"sup_refs");
   const canFinance   = role==="owner" || canView(appUser,"reports");
   // backward compat
   const _canSuppliersBk = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
@@ -2021,7 +2024,8 @@ export default function App() {
           const storeLabel = isOwnerUser?"Все магазины":storeIds.length>0?storeIds.map(id=>sn(id)).join(", "):u.store_id?sn(u.store_id):"Не назначен";
           const perms = u.permissions||{};
           const PERM_NAMES = ["","👁 Просмотр","✏️ Редакт.","🗑 Удаление"];
-          const MODS = [{k:"shifts",l:"🏪 Смены"},{k:"reports",l:"📊 Отчёты"},{k:"suppliers",l:"🏭 Поставщики"},{k:"debts",l:"💳 Долги"},{k:"refs",l:"📚 Справочники"}];
+          const MODS = [{k:"shifts",l:"🏪 Смены"},{k:"reports",l:"📊 Отчёты"},{k:"debts",l:"💳 Долги"},{k:"refs",l:"📚 Справочники"},
+            {k:"sup_schedule",l:"📅 График"},{k:"sup_orders",l:"📦 Заказы"},{k:"sup_deliveries",l:"🚚 Поставки"},{k:"sup_payments",l:"💰 Оплаты"},{k:"sup_refs",l:"⚙️ Справочник"}];
           return(<div key={u.id} onClick={()=>!isOwnerUser&&!isMe&&setEditUserModal(u)}
             style={{background:isMe?C.orBg:C.w,border:`1px solid ${isMe?C.orBd:C.bdr}`,borderRadius:12,padding:"12px 16px",cursor:isOwnerUser||isMe?"default":"pointer",transition:"box-shadow .15s"}}
             onMouseEnter={e=>{if(!isOwnerUser&&!isMe)(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(0,0,0,.08)";}}
@@ -2057,12 +2061,26 @@ export default function App() {
     const isOwnerUser = u.role==="owner";
     const perms:any = u.permissions||{};
     const storeIds:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
-    const MODS = [
-      {k:"shifts",   l:"🏪 Ввод смен",    desc:"Добавление, изменение, удаление смен"},
-      {k:"reports",  l:"📊 Отчёты",       desc:"Просмотр отчётов и зарплатных данных"},
-      {k:"suppliers",l:"🏭 Поставщики",   desc:"Заказы, поставки, оплаты поставщикам"},
-      {k:"debts",    l:"💳 Задолженности",desc:"Просмотр и управление долгами сотрудников"},
-      {k:"refs",     l:"📚 Справочники",  desc:"Сотрудники, магазины, должности"},
+    const MOD_GROUPS = [
+      {
+        key:"hr", label:"👥 Персонал", color:C.or, bg:C.orBg, bd:C.orBd,
+        mods:[
+          {k:"shifts",       l:"🏪 Ввод смен",     desc:"Добавление, изменение, удаление смен"},
+          {k:"reports",      l:"📊 Отчёты",        desc:"Просмотр отчётов и зарплатных данных"},
+          {k:"debts",        l:"💳 Задолженности", desc:"Долги сотрудников, начисления, удержания"},
+          {k:"refs",         l:"📚 Справочники",   desc:"Сотрудники, магазины, должности"},
+        ],
+      },
+      {
+        key:"sup", label:"🏭 Закупки", color:C.pu, bg:C.puBg, bd:C.puBd,
+        mods:[
+          {k:"sup_schedule", l:"📅 График",        desc:"Расписание поставок по пакетам"},
+          {k:"sup_orders",   l:"📦 Заказы",        desc:"Создание и управление заказами"},
+          {k:"sup_deliveries",l:"🚚 Поставки",     desc:"Приёмка и учёт поставок"},
+          {k:"sup_payments", l:"💰 Оплаты",        desc:"Оплата поставщикам, просмотр долгов"},
+          {k:"sup_refs",     l:"⚙️ Справочник",   desc:"Поставщики, агенты, пакеты, расписание"},
+        ],
+      },
     ];
     const LEVELS = [
       {v:0, l:"Нет",          c:C.mu,  bg:C.lt,    bd:C.bdr},
@@ -2133,32 +2151,41 @@ export default function App() {
           {/* Права по модулям */}
           {u.role!=="owner"&&<div>
             <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ПРАВА ДОСТУПА ПО МОДУЛЯМ</div>
-            <div style={{background:C.lt,borderRadius:10,overflow:"hidden",border:`1px solid ${C.bdr}`}}>
-              {/* Заголовок колонок */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr repeat(4,80px)",padding:"7px 12px",borderBottom:`1px solid ${C.bdr}`,background:"#f8fafc"}}>
-                <div style={{fontSize:9,fontWeight:700,color:C.mu}}>МОДУЛЬ</div>
-                {[{v:0,l:"Нет"},{v:1,l:"Просмотр"},{v:2,l:"Редакт."},{v:3,l:"Полный"}].map(lv=>(
-                  <div key={lv.v} style={{fontSize:9,fontWeight:700,color:C.mu,textAlign:"center"}}>{lv.l}</div>
-                ))}
-              </div>
-              {MODS.map((m,mi)=>{
-                const cur = perms[m.k]||0;
-                return(<div key={m.k} style={{display:"grid",gridTemplateColumns:"1fr repeat(4,80px)",padding:"10px 12px",borderBottom:mi<MODS.length-1?`1px solid ${C.bdr}`:"none",background:mi%2===0?C.w:C.lt,alignItems:"center"}}>
-                  <div>
-                    <div style={{fontSize:12,fontWeight:600}}>{m.l}</div>
-                    <div style={{fontSize:10,color:C.mu}}>{m.desc}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {MOD_GROUPS.map(group=>(
+                <div key={group.key} style={{border:`1px solid ${group.bd}`,borderRadius:10,overflow:"hidden"}}>
+                  {/* Заголовок блока */}
+                  <div style={{background:group.bg,padding:"7px 12px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div style={{fontSize:11,fontWeight:700,color:group.color}}>{group.label}</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,72px)"}}>
+                      {["Нет","Просмотр","Редакт.","Полный"].map(l=>(
+                        <div key={l} style={{fontSize:9,fontWeight:700,color:C.mu,textAlign:"center"}}>{l}</div>
+                      ))}
+                    </div>
                   </div>
-                  {[0,1,2,3].map(lv=>{
-                    const active = cur===lv;
-                    const colors = lv===0?[C.mu,C.lt,C.bdr]:lv===1?[C.bl,C.blBg,C.blBd]:lv===2?[C.pu,C.puBg,C.puBd]:[C.gn,C.gnBg,C.gnBd];
-                    return(<div key={lv} style={{display:"flex",justifyContent:"center"}}>
-                      <button onClick={()=>setModPerm(m.k,lv)} style={{width:32,height:32,borderRadius:"50%",border:`2px solid ${active?colors[0]:C.bdr}`,background:active?colors[1]:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:active?colors[0]:C.bdr,fontWeight:700}}>
-                        {active?"●":"○"}
-                      </button>
+                  {/* Строки модулей */}
+                  {group.mods.map((m,mi)=>{
+                    const cur = perms[m.k]||0;
+                    return(<div key={m.k} style={{display:"flex",alignItems:"center",padding:"9px 12px",borderTop:`1px solid ${group.bd}`,background:mi%2===0?C.w:"#fafbfc"}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,fontWeight:600}}>{m.l}</div>
+                        <div style={{fontSize:10,color:C.mu}}>{m.desc}</div>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(4,72px)"}}>
+                        {[0,1,2,3].map(lv=>{
+                          const active = cur===lv;
+                          const colors = lv===0?[C.mu,C.lt,C.bdr]:lv===1?[C.bl,C.blBg,C.blBd]:lv===2?[C.pu,C.puBg,C.puBd]:[C.gn,C.gnBg,C.gnBd];
+                          return(<div key={lv} style={{display:"flex",justifyContent:"center"}}>
+                            <button onClick={()=>setModPerm(m.k,lv)} style={{width:30,height:30,borderRadius:"50%",border:`2px solid ${active?colors[0]:C.bdr}`,background:active?colors[1]:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:active?colors[0]:C.bdr,fontWeight:700}}>
+                              {active?"●":"○"}
+                            </button>
+                          </div>);
+                        })}
+                      </div>
                     </div>);
                   })}
-                </div>);
-              })}
+                </div>
+              ))}
             </div>
           </div>}
 
