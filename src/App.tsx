@@ -15,6 +15,24 @@ const sb = createClient(SUPA_URL, SUPA_KEY);
 // admin  — только ввод смен своего магазина
 const ROLE_LABELS = { owner:"👑 Владелец", manager:"🏪 Управляющий", admin:"📋 Администратор" };
 
+// ══ Система прав доступа ══
+// permissions JSON: { shifts:0-3, reports:0-3, suppliers:0-3, debts:0-3, refs:0-3 }
+// 0=нет, 1=просмотр, 2=редактирование, 3=полный(+удаление)
+function getPerm(user, mod) {
+  if (!user) return 0;
+  if (user.role === "owner") return 3;
+  return (user.permissions || {})[mod] || 0;
+}
+function canView(user, mod)   { return getPerm(user, mod) >= 1; }
+function canEdit(user, mod)   { return getPerm(user, mod) >= 2; }
+function canDelete(user, mod) { return getPerm(user, mod) >= 3; }
+function canAccessStore(user, storeId) {
+  if (!user) return false;
+  if (user.role === "owner") return true;
+  const ids = user.store_ids || [];
+  if (ids.length > 0) return ids.includes(storeId);
+  return !user.store_id || user.store_id === storeId; // backward compat
+}
 function canDo(role, action) {
   if (role === "owner")   return true;
   if (role === "manager") return true;
@@ -445,6 +463,8 @@ export default function App() {
   const [cleanupResult, setCleanupResult] = useState(null);
   const [appUsers, setAppUsers]   = useState([]);
   const [editUser, setEditUser]   = useState(null);
+  const [editUserModal, setEditUserModal] = useState(null); // детальный модал
+  const [deleteUserM,  setDeleteUserM]  = useState(null);
 
   // ── STATE ─────────────────────────────────────────────────────────────────
   const [tab, setTab] = useState("input");
@@ -758,6 +778,19 @@ export default function App() {
     }).eq("id", userId);
     loadAppUsers();
     setEditUser(null);
+  }
+  async function saveUserPerms(u, updates) {
+    await sb.from("app_users").update(updates).eq("id", u.id);
+    const updated = {...u, ...updates};
+    setAppUsers(appUsers.map(x => x.id===u.id ? updated : x));
+    setEditUserModal(updated);
+    if (u.id === appUser?.id) setAppUser({...appUser, ...updates});
+  }
+  async function deleteUser(u) {
+    await sb.from("app_users").delete().eq("id", u.id);
+    setAppUsers(appUsers.filter(x => x.id !== u.id));
+    setDeleteUserM(null);
+    setEditUserModal(null);
   }
 
   // ── DATA LOAD (only after auth) ────────────────────────────────────────────
@@ -1549,9 +1582,17 @@ export default function App() {
 
   // Фильтруем вкладки по роли
   // Флаги доступа
-  const isOwner     = role==="owner" || role==="manager";
-  const canSuppliers = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
-  const canFinance   = isOwner || appUser?.access_finance===true;
+  const isOwner      = role==="owner" || role==="manager";
+  const canSuppliers = role==="owner" || canView(appUser,"suppliers");
+  const canFinance   = role==="owner" || canView(appUser,"reports");
+  // backward compat
+  const _canSuppliersBk = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
+  const _canFinanceBk   = isOwner || appUser?.access_finance===true;
+  const showSuppliers = canSuppliers || _canSuppliersBk;
+  const showReports   = canFinance || _canFinanceBk || role==="admin";
+  const showDebts     = role==="owner" || canView(appUser,"debts") || appUser?.access_debts===true;
+  const showRefs      = role==="owner" || role==="manager" || canView(appUser,"refs");
+  const showShifts    = role==="owner" || role==="manager" || role==="admin" || canView(appUser,"shifts");
 
   // manager/admin видит только свой магазин
   const visibleStores = role === "owner" ? stores : stores.filter((s:any) => s.id === myStoreId);
@@ -1561,17 +1602,17 @@ export default function App() {
     {
       key: "hr", label: "👥 Персонал", color: C.or,
       items: [
-        {k:"input",   l:"🏪 Ввод смен",    show: true},
+        {k:"input",   l:"🏪 Ввод смен",    show: showShifts},
         {k:"sched",   l:"📅 Расписание",   show: role==="owner"||role==="manager"},
-        {k:"reports", l:"📊 Отчёты",       show: canFinance||role==="admin"},
-        {k:"refs",    l:"📚 Справочники",  show: role==="owner"||role==="manager"},
-        {k:"debts",   l:"💳 Задолженности",show: isOwner||appUser?.access_debts===true},
+        {k:"reports", l:"📊 Отчёты",       show: showReports},
+        {k:"refs",    l:"📚 Справочники",  show: showRefs},
+        {k:"debts",   l:"💳 Задолженности",show: showDebts},
       ].filter(i=>i.show),
     },
     {
       key: "supply", label: "🏭 Закупки", color: C.pu,
       items: [
-        {k:"suppliers", l:"🏭 Поставщики", show: canSuppliers},
+        {k:"suppliers", l:"🏭 Поставщики", show: showSuppliers},
       ].filter(i=>i.show),
     },
     ...(role==="owner" ? [{
@@ -1962,112 +2003,192 @@ export default function App() {
     </div>
   </div>)}
 
-  {/* ПАНЕЛЬ УПРАВЛЕНИЯ ПОЛЬЗОВАТЕЛЯМИ (только owner) */}
+  {/* ══ ПАНЕЛЬ ПОЛЬЗОВАТЕЛЕЙ ══ */}
   {usersTab&&(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
-    <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:900,maxWidth:"96vw",boxShadow:"0 24px 60px rgba(0,0,0,.18)",maxHeight:"90vh",overflowY:"auto"}}>
+    <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:860,maxWidth:"96vw",boxShadow:"0 24px 60px rgba(0,0,0,.18)",maxHeight:"92vh",overflowY:"auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div><div style={{fontWeight:800,fontSize:15}}>👥 Пользователи платформы</div><div style={{fontSize:11,color:C.mu,marginTop:2}}>Управление доступом и ролями</div></div>
+        <div><div style={{fontWeight:800,fontSize:15}}>👥 Пользователи платформы</div><div style={{fontSize:11,color:C.mu,marginTop:2}}>{appUsers.length} пользователей</div></div>
         <button onClick={()=>{setUsersTab(false);setEditUser(null);}} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:16}}>×</button>
       </div>
-
       <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"9px 12px",fontSize:11,color:C.am,marginBottom:14}}>
-        💡 Новые пользователи регистрируются сами через форму входа. После регистрации назначь им роль и магазин здесь.
+        💡 Новые пользователи регистрируются сами. После регистрации нажми на пользователя чтобы настроить права.
       </div>
-
-      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
-        <thead><tr><TH ch="Пользователь"/><TH ch="Email"/><TH ch="Роль"/><TH ch="Магазин"/><TH ch="Доп. доступы"/><TH ch=""/></tr></thead>
-        <tbody>{appUsers.map((u,i)=>{
-          const isEdit = editUser?.id===u.id;
-          async function toggleAccess(field:string, cur:boolean){
-            const newVal=!cur;
-            await sb.from("app_users").update({[field]:newVal}).eq("id",u.id);
-            loadAppUsers();
-            if(u.id===appUser?.id) setAppUser({...appUser,[field]:newVal});
-          }
-          return(<tr key={u.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
-            <TD ch={<div style={{display:"flex",alignItems:"center",gap:7}}>
-              <div style={{width:28,height:28,borderRadius:"50%",background:u.id===appUser?.id?C.orBg:C.lt,border:`1px solid ${u.id===appUser?.id?C.orBd:C.bdr}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:u.id===appUser?.id?C.or:C.md}}>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {appUsers.map((u)=>{
+          const isMe = u.id===appUser?.id;
+          const isOwnerUser = u.role==="owner";
+          const storeIds:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
+          const storeLabel = isOwnerUser?"Все магазины":storeIds.length>0?storeIds.map(id=>sn(id)).join(", "):u.store_id?sn(u.store_id):"Не назначен";
+          const perms = u.permissions||{};
+          const PERM_NAMES = ["","👁 Просмотр","✏️ Редакт.","🗑 Удаление"];
+          const MODS = [{k:"shifts",l:"🏪 Смены"},{k:"reports",l:"📊 Отчёты"},{k:"suppliers",l:"🏭 Поставщики"},{k:"debts",l:"💳 Долги"},{k:"refs",l:"📚 Справочники"}];
+          return(<div key={u.id} onClick={()=>!isOwnerUser&&!isMe&&setEditUserModal(u)}
+            style={{background:isMe?C.orBg:C.w,border:`1px solid ${isMe?C.orBd:C.bdr}`,borderRadius:12,padding:"12px 16px",cursor:isOwnerUser||isMe?"default":"pointer",transition:"box-shadow .15s"}}
+            onMouseEnter={e=>{if(!isOwnerUser&&!isMe)(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(0,0,0,.08)";}}
+            onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.boxShadow="none";}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              <div style={{width:36,height:36,borderRadius:"50%",background:isOwnerUser?C.orBg:C.blBg,border:`2px solid ${isOwnerUser?C.orBd:C.blBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:isOwnerUser?C.or:C.bl,flexShrink:0}}>
                 {(u.full_name||u.email||"?")[0].toUpperCase()}
               </div>
-              <span style={{fontWeight:600,fontSize:12}}>{u.full_name||"—"}{u.id===appUser?.id&&<span style={{fontSize:10,color:C.or,marginLeft:4}}>вы</span>}</span>
-            </div>}/>
-            <TD ch={<span style={{fontSize:11,color:C.mu}}>{u.email}</span>}/>
-            <TD ch={isEdit
-              ?<select defaultValue={u.role} id={`role_${u.id}`} style={I({width:140})}>
-                  <option value="owner">👑 Владелец</option>
-                  <option value="manager">🏪 Управляющий</option>
-                  <option value="admin">📋 Администратор</option>
-                </select>
-              :<Bdg c={u.role==="owner"?C.or:u.role==="manager"?C.bl:C.pu} bg={u.role==="owner"?C.orBg:u.role==="manager"?C.blBg:C.puBg} bd={u.role==="owner"?C.orBd:u.role==="manager"?C.blBd:C.puBd} ch={ROLE_LABELS[u.role]||u.role}/>
-            }/>
-            <TD ch={isEdit
-              ?<select defaultValue={u.store_id||""} id={`store_${u.id}`} style={I({width:140})}>
-                  <option value="">— Все магазины —</option>
-                  {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              :<span style={{fontSize:11,color:C.md}}>{u.store_id?sn(u.store_id):"Все магазины"}</span>
-            }/>
-            <TD ch={<div style={{display:"flex",gap:16}}>
-              {([
-                ["access_debts",    "💳 Долги",     u.access_debts],
-                ["access_suppliers","🏭 Закупщик",  u.access_suppliers],
-                ["access_finance",  "💰 Бухгалтер", u.access_finance],
-              ] as [string,string,boolean][]).map(([field,label,val])=>(
-                <label key={field} style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontSize:12,color:val?C.tx:C.mu,whiteSpace:"nowrap"}}>
-                  <input type="checkbox" checked={val||false} onChange={()=>toggleAccess(field,val||false)} style={{cursor:"pointer",width:14,height:14}}/>
-                  {label}
-                </label>
-              ))}
-            </div>}/>
-            <TD ch={isEdit
-              ?<div style={{display:"flex",gap:4}}>
-                  <button onClick={()=>{
-                    const r=document.getElementById(`role_${u.id}`)?.value||u.role;
-                    const s=document.getElementById(`store_${u.id}`)?.value||"";
-                    saveUserRole(u.id,r,s?+s:null);
-                  }} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:11,cursor:"pointer",fontWeight:700}}>✓</button>
-                  <button onClick={()=>setEditUser(null)} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,padding:"3px 7px",borderRadius:5,fontSize:11,cursor:"pointer"}}>✕</button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                  {u.full_name||"—"}
+                  {isMe&&<span style={{background:C.orBg,border:`1px solid ${C.orBd}`,color:C.or,fontSize:9,padding:"1px 6px",borderRadius:20,fontWeight:700}}>вы</span>}
+                  <Bdg c={u.role==="owner"?C.or:u.role==="manager"?C.bl:C.pu} bg={u.role==="owner"?C.orBg:u.role==="manager"?C.blBg:C.puBg} bd={u.role==="owner"?C.orBd:u.role==="manager"?C.blBd:C.puBd} ch={ROLE_LABELS[u.role]||u.role}/>
                 </div>
-              :<button onClick={()=>setEditUser(u)} disabled={u.id===appUser?.id} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:u.id===appUser?.id?C.bdr:C.md,padding:"3px 8px",borderRadius:5,fontSize:11,cursor:u.id===appUser?.id?"default":"pointer"}}>✎ Изменить</button>
-            }/>
-          </tr>);
-        })}</tbody>
-      </table>
-
-      <div style={{background:C.lt,borderRadius:10,padding:"12px 14px"}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.md,marginBottom:8}}>📋 Права по ролям и доступам:</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md,marginBottom:8}}>
-          <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.or,marginBottom:4}}>👑 Владелец</div>
-            <div>✅ Все магазины</div><div>✅ Справочники</div><div>✅ Все отчёты + зарплаты</div><div>✅ Управление пользователями</div><div>✅ Поставщики и закупки</div>
-          </div>
-          <div style={{background:C.blBg,border:`1px solid ${C.blBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.bl,marginBottom:4}}>🏪 Управляющий</div>
-            <div>✅ Все магазины</div><div>✅ Все функции</div><div>✅ Все отчёты и зарплаты</div><div>✅ Справочники</div><div>✅ Поставщики и закупки</div>
-          </div>
-          <div style={{background:C.puBg,border:`1px solid ${C.puBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.pu,marginBottom:4}}>📋 Администратор</div>
-            <div>✅ Только свой магазин</div><div>✅ Ввод смен</div><div>✅ Отчёт по магазину</div><div>✅ Отчёт по сотруднику</div><div>❌ Зарплаты скрыты</div>
-          </div>
-        </div>
-        <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>🔑 Дополнительные доступы (назначаются к любой роли):</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,fontSize:10,color:C.md}}>
-          <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.rd,marginBottom:4}}>💳 Долги</div>
-            <div>✅ Задолженности сотрудников</div><div>✅ Начисления и удержания</div>
-          </div>
-          <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.gn,marginBottom:4}}>🏭 Закупщик</div>
-            <div>✅ Поставщики</div><div>✅ Закупки и накладные</div><div>✅ Оплаты поставщикам</div>
-          </div>
-          <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:7,padding:"8px 10px"}}>
-            <div style={{fontWeight:700,color:C.am,marginBottom:4}}>💰 Бухгалтер</div>
-            <div>✅ Поставщики и закупки</div><div>✅ Все отчёты + зарплаты</div>
-          </div>
-        </div>
+                <div style={{fontSize:11,color:C.mu,marginTop:2}}>{u.email} · {storeLabel}</div>
+              </div>
+              {/* Мини-сводка прав */}
+              {!isOwnerUser&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {MODS.map(m=>{const lv=perms[m.k]||0;return lv>0?(<span key={m.k} style={{background:lv===3?C.gnBg:lv===2?C.blBg:C.lt,border:`1px solid ${lv===3?C.gnBd:lv===2?C.blBd:C.bdr}`,color:lv===3?C.gn:lv===2?C.bl:C.mu,padding:"2px 7px",borderRadius:20,fontSize:9,fontWeight:700}}>{m.l}</span>):null;})}
+                {Object.values(perms).every(v=>!v)&&<span style={{fontSize:10,color:C.mu,fontStyle:"italic"}}>нет доступов</span>}
+              </div>}
+              {!isOwnerUser&&!isMe&&<span style={{fontSize:11,color:C.mu}}>✎</span>}
+            </div>
+          </div>);
+        })}
       </div>
     </div>
   </div>)}
+
+  {/* ══ ДЕТАЛЬНЫЙ МОДАЛ ПОЛЬЗОВАТЕЛЯ ══ */}
+  {editUserModal&&(()=>{
+    const u = editUserModal;
+    const isOwnerUser = u.role==="owner";
+    const perms:any = u.permissions||{};
+    const storeIds:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
+    const MODS = [
+      {k:"shifts",   l:"🏪 Ввод смен",    desc:"Добавление, изменение, удаление смен"},
+      {k:"reports",  l:"📊 Отчёты",       desc:"Просмотр отчётов и зарплатных данных"},
+      {k:"suppliers",l:"🏭 Поставщики",   desc:"Заказы, поставки, оплаты поставщикам"},
+      {k:"debts",    l:"💳 Задолженности",desc:"Просмотр и управление долгами сотрудников"},
+      {k:"refs",     l:"📚 Справочники",  desc:"Сотрудники, магазины, должности"},
+    ];
+    const LEVELS = [
+      {v:0, l:"Нет",          c:C.mu,  bg:C.lt,    bd:C.bdr},
+      {v:1, l:"Просмотр",     c:C.bl,  bg:C.blBg,  bd:C.blBd},
+      {v:2, l:"Редактир.",    c:C.pu,  bg:C.puBg,  bd:C.puBd},
+      {v:3, l:"Полный",       c:C.gn,  bg:C.gnBg,  bd:C.gnBd},
+    ];
+    async function setRole(role) {
+      const updates:any = {role};
+      if (role==="owner") { updates.store_ids=[]; updates.permissions={}; }
+      await saveUserPerms(u, updates);
+    }
+    async function setModPerm(mod, level) {
+      const newPerms = {...perms, [mod]: level};
+      await saveUserPerms(u, {permissions: newPerms});
+    }
+    async function toggleStore(storeId) {
+      const cur:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
+      const next = cur.includes(storeId)?cur.filter(x=>x!==storeId):[...cur,storeId];
+      await saveUserPerms(u, {store_ids: next});
+    }
+    return(<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300}}>
+      <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,width:560,maxWidth:"96vw",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.22)"}}>
+        {/* Шапка */}
+        <div style={{padding:"18px 22px 14px",borderBottom:`1px solid ${C.bdr}`,display:"flex",alignItems:"center",gap:14}}>
+          <div style={{width:44,height:44,borderRadius:"50%",background:C.blBg,border:`2px solid ${C.blBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800,color:C.bl,flexShrink:0}}>
+            {(u.full_name||u.email||"?")[0].toUpperCase()}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:15}}>{u.full_name||"—"}</div>
+            <div style={{fontSize:11,color:C.mu}}>{u.email}</div>
+          </div>
+          <button onClick={()=>setEditUserModal(null)} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:16,flexShrink:0}}>×</button>
+        </div>
+
+        <div style={{padding:"16px 22px",display:"flex",flexDirection:"column",gap:16}}>
+          {/* Роль */}
+          <div>
+            <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>РОЛЬ</div>
+            <div style={{display:"flex",gap:6}}>
+              {([["owner","👑 Владелец",C.or,C.orBg,C.orBd],["manager","🏪 Управляющий",C.bl,C.blBg,C.blBd],["admin","📋 Администратор",C.pu,C.puBg,C.puBd]] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
+                <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"8px 4px",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                  background:u.role===rv?rbg:C.lt, border:`2px solid ${u.role===rv?rbd:C.bdr}`, color:u.role===rv?rc:C.mu}}>
+                  {rl}
+                </button>
+              ))}
+            </div>
+            {u.role==="owner"&&<div style={{marginTop:8,fontSize:10,color:C.or,background:C.orBg,borderRadius:7,padding:"6px 10px"}}>👑 Владелец имеет полный доступ ко всем модулям и магазинам автоматически.</div>}
+          </div>
+
+          {/* Магазины */}
+          {u.role!=="owner"&&<div>
+            <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ДОСТУП К МАГАЗИНАМ</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {stores.map(s=>{
+                const checked=storeIds.includes(s.id);
+                return(<label key={s.id} onClick={()=>toggleStore(s.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:8,cursor:"pointer",background:checked?C.gnBg:C.lt,border:`1px solid ${checked?C.gnBd:C.bdr}`}}>
+                  <div style={{width:18,height:18,borderRadius:5,border:`2px solid ${checked?C.gn:C.bdr}`,background:checked?C.gn:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {checked&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
+                  </div>
+                  <span style={{fontSize:12,fontWeight:600,color:checked?C.gn:C.tx}}>{s.name}</span>
+                  {s.address&&<span style={{fontSize:10,color:C.mu}}>{s.address}</span>}
+                </label>);
+              })}
+            </div>
+          </div>}
+
+          {/* Права по модулям */}
+          {u.role!=="owner"&&<div>
+            <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ПРАВА ДОСТУПА ПО МОДУЛЯМ</div>
+            <div style={{background:C.lt,borderRadius:10,overflow:"hidden",border:`1px solid ${C.bdr}`}}>
+              {/* Заголовок колонок */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr repeat(4,80px)",padding:"7px 12px",borderBottom:`1px solid ${C.bdr}`,background:"#f8fafc"}}>
+                <div style={{fontSize:9,fontWeight:700,color:C.mu}}>МОДУЛЬ</div>
+                {[{v:0,l:"Нет"},{v:1,l:"Просмотр"},{v:2,l:"Редакт."},{v:3,l:"Полный"}].map(lv=>(
+                  <div key={lv.v} style={{fontSize:9,fontWeight:700,color:C.mu,textAlign:"center"}}>{lv.l}</div>
+                ))}
+              </div>
+              {MODS.map((m,mi)=>{
+                const cur = perms[m.k]||0;
+                return(<div key={m.k} style={{display:"grid",gridTemplateColumns:"1fr repeat(4,80px)",padding:"10px 12px",borderBottom:mi<MODS.length-1?`1px solid ${C.bdr}`:"none",background:mi%2===0?C.w:C.lt,alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600}}>{m.l}</div>
+                    <div style={{fontSize:10,color:C.mu}}>{m.desc}</div>
+                  </div>
+                  {[0,1,2,3].map(lv=>{
+                    const active = cur===lv;
+                    const colors = lv===0?[C.mu,C.lt,C.bdr]:lv===1?[C.bl,C.blBg,C.blBd]:lv===2?[C.pu,C.puBg,C.puBd]:[C.gn,C.gnBg,C.gnBd];
+                    return(<div key={lv} style={{display:"flex",justifyContent:"center"}}>
+                      <button onClick={()=>setModPerm(m.k,lv)} style={{width:32,height:32,borderRadius:"50%",border:`2px solid ${active?colors[0]:C.bdr}`,background:active?colors[1]:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:active?colors[0]:C.bdr,fontWeight:700}}>
+                        {active?"●":"○"}
+                      </button>
+                    </div>);
+                  })}
+                </div>);
+              })}
+            </div>
+          </div>}
+
+          {/* Удаление */}
+          <div style={{borderTop:`1px solid ${C.bdr}`,paddingTop:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontSize:11,color:C.mu}}>Удаление отзовёт доступ к платформе. Данные сохранятся.</div>
+            <button onClick={()=>setDeleteUserM(u)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"7px 14px",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              🗑 Удалить пользователя
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>);
+  })()}
+
+  {/* ══ МОДАЛ УДАЛЕНИЯ ПОЛЬЗОВАТЕЛЯ ══ */}
+  {deleteUserM&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:400}}>
+    <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:14,padding:24,width:360,maxWidth:"95vw",boxShadow:"0 20px 40px rgba(0,0,0,.2)",textAlign:"center"}}>
+      <div style={{fontSize:32,marginBottom:10}}>⚠️</div>
+      <div style={{fontWeight:800,fontSize:15,marginBottom:6}}>Удалить пользователя?</div>
+      <div style={{fontSize:13,fontWeight:600,color:C.md,marginBottom:4}}>{deleteUserM.full_name||deleteUserM.email}</div>
+      <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"10px 12px",fontSize:11,color:C.am,marginBottom:16,textAlign:"left"}}>
+        ⚠️ Пользователь потеряет доступ. Для повторного входа нужна новая регистрация на том же email.
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>setDeleteUserM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"10px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
+        <button onClick={()=>deleteUser(deleteUserM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"10px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
+      </div>
+    </div>
+  </div>}
 
 </div>
   );
