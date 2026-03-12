@@ -350,19 +350,19 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                           :isSkipped
                           ?<Bdg c={C.mu} bg={C.lt} bd={C.bdr} ch="⏭ Пропущен"/>
                           :<div style={{display:"flex",gap:6}}>
-                            <button onClick={()=>{
+                            {canEditOrders&&<button onClick={()=>{
                               setOrderF({package_id:sc.package_id,store_id:sc.store_id,
                                 order_date:day.dateStr,status:"sent",
                                 expected_delivery_date:"",amount_ordered:"",notes:""});
                               setOrderModal("add");
                             }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
                               + Заказать
-                            </button>
-                            <button onClick={()=>skipOrder(sc.package_id,sc.store_id,day.dateStr)}
+                            </button>}
+                            {canEditOrders&&<button onClick={()=>skipOrder(sc.package_id,sc.store_id,day.dateStr)}
                               style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"7px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
                               title="Пропустить этот заказ — товар не нужен">
                               ⏭ Пропустить
-                            </button>
+                            </button>}
                           </div>
                         }
                       </div>
@@ -454,21 +454,21 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     🚚 Принять
                   </button>;
                 })()}
-                {o.status==="sent"&&<button onClick={async()=>{
+                {o.status==="sent"&&canEditOrders&&<button onClick={async()=>{
                   await sb.from("sup_orders").update({status:"no_show"}).eq("id",o.id);
                   setOrders(orders.map((x:any)=>x.id===o.id?{...x,status:"no_show"}:x));
                 }} style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}
                   title="Товар не пришёл">
                   ⚠️ Не пришло
                 </button>}
-                {o.status==="no_show"&&<button onClick={async()=>{
+                {o.status==="no_show"&&canEditOrders&&<button onClick={async()=>{
                   await sb.from("sup_orders").update({status:"sent"}).eq("id",o.id);
                   setOrders(orders.map((x:any)=>x.id===o.id?{...x,status:"sent"}:x));
                 }} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit"}}
                   title="Вернуть в статус Отправлен">
                   ↩ Вернуть
                 </button>}
-                <button onClick={()=>setDelOrdM(o)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
+                {canEditOrders&&<button onClick={()=>setDelOrdM(o)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>}
               </div>}/>
             </tr>);
           })}</tbody>

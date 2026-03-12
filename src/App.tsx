@@ -1592,10 +1592,15 @@ export default function App() {
   const _canSuppliersBk = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
   const _canFinanceBk   = isOwner || appUser?.access_finance===true;
   const showSuppliers = canSuppliers || _canSuppliersBk;
-  const showReports   = canFinance || _canFinanceBk || role==="admin";
+  const showReports   = canFinance || _canFinanceBk || (role==="admin"&&!hasAnyPerm);
   const showDebts     = role==="owner" || canView(appUser,"debts") || appUser?.access_debts===true;
-  const showRefs      = role==="owner" || role==="manager" || canView(appUser,"refs");
-  const showShifts    = role==="owner" || role==="manager" || role==="admin" || canView(appUser,"shifts");
+  const showRefs      = role==="owner" || role==="manager" || canView(appUser,"refs") || (role==="admin"&&!hasAnyPerm);
+  const hasAnyPerm    = Object.values(appUser?.permissions||{}).some((v:any)=>v>0);
+  // Если у admin нет настроенных прав — показываем смены по умолчанию (backward compat)
+  // Если права настроены — строго по ним
+  const showShifts    = role==="owner" || role==="manager"
+    || canView(appUser,"shifts")
+    || (role==="admin" && !hasAnyPerm);
 
   // manager/admin видит только свой магазин
   const visibleStores = role === "owner" ? stores : stores.filter((s:any) => s.id === myStoreId);
@@ -2151,6 +2156,28 @@ export default function App() {
           {/* Права по модулям */}
           {u.role!=="owner"&&<div>
             <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ПРАВА ДОСТУПА ПО МОДУЛЯМ</div>
+
+            {/* ── Пресеты ── */}
+            <div style={{background:C.lt,borderRadius:9,padding:"10px 12px",marginBottom:10}}>
+              <div style={{fontSize:10,color:C.mu,fontWeight:600,marginBottom:7}}>⚡ Быстрые шаблоны:</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {([
+                  {l:"🏪 Администратор магазина", c:C.pu, perms:{shifts:3,reports:1,debts:0,refs:0,sup_schedule:0,sup_orders:0,sup_deliveries:3,sup_payments:0,sup_refs:0}},
+                  {l:"📦 Закупщик",               c:C.bl, perms:{shifts:0,reports:0,debts:0,refs:0,sup_schedule:2,sup_orders:2,sup_deliveries:2,sup_payments:1,sup_refs:1}},
+                  {l:"💰 Бухгалтер",              c:C.gn, perms:{shifts:0,reports:2,debts:1,refs:0,sup_schedule:1,sup_orders:1,sup_deliveries:1,sup_payments:3,sup_refs:0}},
+                  {l:"👀 Только просмотр",        c:C.am, perms:{shifts:1,reports:1,debts:1,refs:1,sup_schedule:1,sup_orders:1,sup_deliveries:1,sup_payments:1,sup_refs:1}},
+                ] as any[]).map(preset=>(
+                  <button key={preset.l} onClick={()=>saveUserPerms(u,{permissions:preset.perms})}
+                    style={{background:C.w,border:`1px solid ${C.bdr}`,color:preset.c,padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {preset.l}
+                  </button>
+                ))}
+                <button onClick={()=>saveUserPerms(u,{permissions:{}})}
+                  style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"5px 12px",borderRadius:20,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                  ✕ Сбросить
+                </button>
+              </div>
+            </div>
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {MOD_GROUPS.map(group=>(
                 <div key={group.key} style={{border:`1px solid ${group.bd}`,borderRadius:10,overflow:"hidden"}}>
