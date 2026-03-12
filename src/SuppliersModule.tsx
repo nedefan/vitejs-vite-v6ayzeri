@@ -21,6 +21,7 @@ const STATUS_ORDER:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
   sent:      {l:"Отправлен", c:C.bl, bg:C.blBg,  bd:C.blBd},
   delivered: {l:"Доставлен", c:C.gn, bg:C.gnBg,  bd:C.gnBd},
   cancelled: {l:"Отменён",   c:C.rd, bg:C.rdBg,  bd:C.rdBd},
+  skipped:   {l:"⏭ Пропущен", c:C.mu, bg:C.lt,   bd:C.bdr},
 };
 const STATUS_DELIV:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
   pending:     {l:"Ожидается",     c:C.am, bg:C.amBg, bd:C.amBd},
@@ -157,6 +158,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ════════════════════════════════════════════════════════════════
   // TAB: ГРАФИК
   // ════════════════════════════════════════════════════════════════
+  async function skipOrder(packageId:number, storeId:number, dateStr:string){
+    const{data,error}=await sb.from("sup_orders").insert({
+      package_id:packageId, store_id:storeId, order_date:dateStr,
+      status:"skipped", amount_ordered:0, notes:"Пропущен вручную",
+      expected_delivery_date:null, created_by_role:"purchaser"
+    }).select().single();
+    if(data) setOrders(prev=>[data,...prev]);
+    if(error) console.error("skipOrder error:", error);
+  }
   function renderSchedule(){
     // ── Фильтры ──
     const [fStore, setFStore] = (window as any).__schedFilters || [0,0];
@@ -197,8 +207,48 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const totalToday = byDay[0].items.length;
     const totalWeek  = byDay.reduce((s,d)=>s+d.items.length,0);
 
+    // Пропущенные заказы — прошедшие 14 дней где были дни заказа но заказ не создан
+    const missedItems:{dateStr:string,label:string,sc:any}[] = [];
+    for(let i=14;i>=1;i--){
+      const d = new Date(todayDate); d.setDate(d.getDate()-i);
+      const dateStr = d.toISOString().slice(0,10);
+      const dow = d.getDay();
+      filtered.forEach(sc=>{
+        const od:number[]=Array.isArray(sc.order_days)?sc.order_days:[];
+        if(!od.includes(dow)) return;
+        const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===dateStr&&o.status!=="skipped");
+        const isSkipped=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===dateStr&&o.status==="skipped");
+        if(!hasOrder&&!isSkipped) missedItems.push({dateStr, label:`${DAY[dow]}, ${d.getDate()} ${d.toLocaleDateString("ru-RU",{month:"short"})}`, sc});
+      });
+    }
+
     return(<div>
-      {/* ── Фильтры ── */}
+      {/* ── Пропущенные заказы ── */}
+      {missedItems.length>0&&<div style={{background:"#fffbf5",border:`1px solid ${C.amBd}`,borderRadius:12,padding:"10px 14px",marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.am,marginBottom:8}}>⚠️ Пропущенные заказы по расписанию ({missedItems.length})</div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {missedItems.map((m,idx)=>{
+            const pkg=pkgObj(m.sc.package_id);
+            const sup=supByPkg(m.sc.package_id);
+            return(<div key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 10px",background:C.w,borderRadius:8,border:`1px solid ${C.bdr}`,flexWrap:"wrap"}}>
+              <span style={{fontSize:10,color:C.am,fontWeight:700,whiteSpace:"nowrap",minWidth:60}}>{m.label}</span>
+              <span style={{fontSize:11,color:C.md,flex:1}}>{sup?.name||"?"} › {pkg?.name||"?"}</span>
+              <span style={{fontSize:10,color:C.mu}}>🏪 {sn(m.sc.store_id)}</span>
+              <button onClick={()=>{
+                setOrderF({package_id:m.sc.package_id,store_id:m.sc.store_id,
+                  order_date:m.dateStr,status:"sent",expected_delivery_date:"",amount_ordered:"",notes:""});
+                setOrderModal("add");
+              }} style={{background:"none",border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 10px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                + Заказать
+              </button>
+              <button onClick={()=>skipOrder(m.sc.package_id,m.sc.store_id,m.dateStr)}
+                style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"3px 10px",borderRadius:6,fontSize:10,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                ⏭ Пропустить
+              </button>
+            </div>);
+          })}
+        </div>
+      </div>}
       <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
         <select value={schedFStore||""} onChange={e=>setSchedFStore(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
           <option value="">🏪 Все магазины</option>
@@ -253,15 +303,17 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     const pkg=pkgObj(sc.package_id);
                     const sup=supByPkg(sc.package_id);
                     const delivDays:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
-                    const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr);
+                    const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr&&o.status!=="skipped");
+                    const isSkipped=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr&&o.status==="skipped");
                     // Агенты этого пакета
                     const pkgAgents=agentPkgs.filter((ap:any)=>ap.package_id===sc.package_id).map((ap:any)=>agents.find((a:any)=>a.id===ap.agent_id)).filter(Boolean);
                     return(
                       <div key={sc.id} style={{
-                        background: hasOrder ? C.gnBg : C.w,
-                        border: `1px solid ${hasOrder?C.gnBd:C.bdr}`,
+                        background: hasOrder ? C.gnBg : isSkipped ? C.lt : C.w,
+                        border: `1px solid ${hasOrder?C.gnBd:isSkipped?C.bdr:C.bdr}`,
                         borderRadius:10, padding:"10px 16px",
                         display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+                        opacity: isSkipped ? 0.6 : 1,
                       }}>
                         <div style={{flex:1,minWidth:200}}>
                           <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>
@@ -278,14 +330,23 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                         </div>
                         {hasOrder
                           ?<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="✓ Заказ создан"/>
-                          :<button onClick={()=>{
-                            setOrderF({package_id:sc.package_id,store_id:sc.store_id,
-                              order_date:day.dateStr,status:"sent",
-                              expected_delivery_date:"",amount_ordered:"",notes:""});
-                            setOrderModal("add");
-                          }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                            + Заказать
-                          </button>
+                          :isSkipped
+                          ?<Bdg c={C.mu} bg={C.lt} bd={C.bdr} ch="⏭ Пропущен"/>
+                          :<div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>{
+                              setOrderF({package_id:sc.package_id,store_id:sc.store_id,
+                                order_date:day.dateStr,status:"sent",
+                                expected_delivery_date:"",amount_ordered:"",notes:""});
+                              setOrderModal("add");
+                            }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                              + Заказать
+                            </button>
+                            <button onClick={()=>skipOrder(sc.package_id,sc.store_id,day.dateStr)}
+                              style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"7px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+                              title="Пропустить этот заказ — товар не нужен">
+                              ⏭ Пропустить
+                            </button>
+                          </div>
                         }
                       </div>
                     );
@@ -310,7 +371,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ════════════════════════════════════════════════════════════════
   function renderOrders(){
     const vis = (isAdmin ? orders.filter(o=>o.store_id===myStoreId) : orders)
-      .filter(o=>!!pkgObj(o.package_id)); // скрываем заказы с удалённым пакетом
+      .filter(o=>!!pkgObj(o.package_id)&&o.status!=="skipped"); // скрываем заказы с удалённым пакетом и пропущенные
     return(<div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
         <button onClick={()=>{setOrderF({order_date:today,status:"sent",amount_ordered:"",expected_delivery_date:"",notes:"",created_by_role:isAdmin?"admin":"purchaser"});setOrderModal("add");}}
@@ -843,6 +904,12 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     setDelPkgM(null);
   }
   async function deleteOrder(o:any){
+    // Удаляем связанный счёт если он не оплачен
+    const linkedInv = invoices.find((inv:any)=>inv.order_id===o.id);
+    if(linkedInv){
+      await sb.from("sup_invoices").delete().eq("id",linkedInv.id);
+      setInvoices(invoices.filter((inv:any)=>inv.id!==linkedInv.id));
+    }
     await sb.from("sup_orders").delete().eq("id",o.id);
     setOrders(orders.filter((x:any)=>x.id!==o.id));
     setDelOrdM(null);
@@ -858,6 +925,11 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     setDelDelvM(null);
   }
   async function deletePayment(p:any){
+    // Если оплата была по счёту — возвращаем счёт в "awaiting_payment"
+    if(p.invoice_id){
+      await sb.from("sup_invoices").update({status:"awaiting_payment",paid_at:null}).eq("id",p.invoice_id);
+      setInvoices(invoices.map((inv:any)=>inv.id===p.invoice_id?{...inv,status:"awaiting_payment",paid_at:null}:inv));
+    }
     await sb.from("sup_payments").delete().eq("id",p.id);
     setPayments(payments.filter((x:any)=>x.id!==p.id));
     setDelPayM(null);
@@ -1264,7 +1336,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
         <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить заказ?</div>
         <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delOrdM.package_id)}</div>
-        <div style={{fontSize:11,color:C.mu,marginBottom:14}}>{fmtDate(delOrdM.order_date)} · {delOrdM.amount_ordered?fmt(delOrdM.amount_ordered)+" ₸":"б/с"}</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:10}}>{fmtDate(delOrdM.order_date)} · {delOrdM.amount_ordered?fmt(delOrdM.amount_ordered)+" ₸":"б/с"}</div>
+        {invoices.some((inv:any)=>inv.order_id===delOrdM.id)&&<div style={{background:"#fdf4ff",border:"1px solid #e9d5ff",borderRadius:8,padding:"8px 12px",fontSize:11,color:C.pu,marginBottom:14,textAlign:"left"}}>💜 Связанный счёт на предоплату тоже будет удалён.</div>}
         <div style={{display:"flex",gap:7}}>
           <button onClick={()=>setDelOrdM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={()=>deleteOrder(delOrdM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
