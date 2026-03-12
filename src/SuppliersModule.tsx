@@ -17,10 +17,12 @@ const DAY = ["Вс","Пн","Вт","Ср","Чт","Пт","Сб"];
 const DAYS_FULL = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
 
 const STATUS_ORDER:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
-  draft:     {l:"Черновик",  c:C.mu, bg:C.lt,    bd:C.bdr},
-  sent:      {l:"Отправлен", c:C.bl, bg:C.blBg,  bd:C.blBd},
-  delivered: {l:"Доставлен", c:C.gn, bg:C.gnBg,  bd:C.gnBd},
-  cancelled: {l:"Отменён",   c:C.rd, bg:C.rdBg,  bd:C.rdBd},
+  draft:     {l:"Черновик",    c:C.mu, bg:C.lt,    bd:C.bdr},
+  sent:      {l:"Отправлен",   c:C.bl, bg:C.blBg,  bd:C.blBd},
+  delivered: {l:"Доставлен",   c:C.gn, bg:C.gnBg,  bd:C.gnBd},
+  cancelled: {l:"Отменён",     c:C.rd, bg:C.rdBg,  bd:C.rdBd},
+  skipped:   {l:"⏭ Пропущен", c:C.mu, bg:C.lt,    bd:C.bdr},
+  no_show:   {l:"⚠️ Не пришло",c:C.am, bg:C.amBg,  bd:C.amBd},
 };
 const STATUS_DELIV:{[k:string]:{l:string,c:string,bg:string,bd:string}} = {
   pending:     {l:"Ожидается",     c:C.am, bg:C.amBg, bd:C.amBd},
@@ -80,6 +82,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const [orderF, setOrderF] = useState<any>({});
   const [recvF,  setRecvF]  = useState<any>({});
   const [payF,   setPayF]   = useState<any>({});
+  const [paySupFilter, setPaySupFilter] = useState(0);
+  const [ordersStoreFilter, setOrdersStoreFilter] = useState(0);
 
   // ── role ──────────────────────────────────────────────────────────────────
   const role        = appUser?.role || "admin";
@@ -135,7 +139,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
       map[p.supplier_id].total += Number(d.amount_invoiced);
       map[p.supplier_id].delivs.push(d);
     });
-    payments.forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
+    payments.filter(p=>!p.invoice_id).forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
     return map;
   },[suppliers,deliveries,payments,packages]);
 
@@ -156,6 +160,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // ════════════════════════════════════════════════════════════════
   // TAB: ГРАФИК
   // ════════════════════════════════════════════════════════════════
+  async function skipOrder(packageId:number, storeId:number, dateStr:string){
+    const{data,error}=await sb.from("sup_orders").insert({
+      package_id:packageId, store_id:storeId, order_date:dateStr,
+      status:"skipped", amount_ordered:0, notes:"Пропущен вручную",
+      expected_delivery_date:null, created_by_role:"purchaser"
+    }).select().single();
+    if(data) setOrders(prev=>[data,...prev]);
+    if(error) console.error("skipOrder error:", error);
+  }
   function renderSchedule(){
     // ── Фильтры ──
     const [fStore, setFStore] = (window as any).__schedFilters || [0,0];
@@ -196,8 +209,48 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const totalToday = byDay[0].items.length;
     const totalWeek  = byDay.reduce((s,d)=>s+d.items.length,0);
 
+    // Пропущенные заказы — прошедшие 14 дней где были дни заказа но заказ не создан
+    const missedItems:{dateStr:string,label:string,sc:any}[] = [];
+    for(let i=14;i>=1;i--){
+      const d = new Date(todayDate); d.setDate(d.getDate()-i);
+      const dateStr = d.toISOString().slice(0,10);
+      const dow = d.getDay();
+      filtered.forEach(sc=>{
+        const od:number[]=Array.isArray(sc.order_days)?sc.order_days:[];
+        if(!od.includes(dow)) return;
+        const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===dateStr&&o.status!=="skipped");
+        const isSkipped=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===dateStr&&o.status==="skipped");
+        if(!hasOrder&&!isSkipped) missedItems.push({dateStr, label:`${DAY[dow]}, ${d.getDate()} ${d.toLocaleDateString("ru-RU",{month:"short"})}`, sc});
+      });
+    }
+
     return(<div>
-      {/* ── Фильтры ── */}
+      {/* ── Пропущенные заказы ── */}
+      {missedItems.length>0&&<div style={{background:"#fffbf5",border:`1px solid ${C.amBd}`,borderRadius:12,padding:"10px 14px",marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.am,marginBottom:8}}>⚠️ Пропущенные заказы по расписанию ({missedItems.length})</div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {missedItems.map((m,idx)=>{
+            const pkg=pkgObj(m.sc.package_id);
+            const sup=supByPkg(m.sc.package_id);
+            return(<div key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 10px",background:C.w,borderRadius:8,border:`1px solid ${C.bdr}`,flexWrap:"wrap"}}>
+              <span style={{fontSize:10,color:C.am,fontWeight:700,whiteSpace:"nowrap",minWidth:60}}>{m.label}</span>
+              <span style={{fontSize:11,color:C.md,flex:1}}>{sup?.name||"?"} › {pkg?.name||"?"}</span>
+              <span style={{fontSize:10,color:C.mu}}>🏪 {sn(m.sc.store_id)}</span>
+              <button onClick={()=>{
+                setOrderF({package_id:m.sc.package_id,store_id:m.sc.store_id,
+                  order_date:m.dateStr,status:"sent",expected_delivery_date:"",amount_ordered:"",notes:""});
+                setOrderModal("add");
+              }} style={{background:"none",border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 10px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                + Заказать
+              </button>
+              <button onClick={()=>skipOrder(m.sc.package_id,m.sc.store_id,m.dateStr)}
+                style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"3px 10px",borderRadius:6,fontSize:10,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                ⏭ Пропустить
+              </button>
+            </div>);
+          })}
+        </div>
+      </div>}
       <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
         <select value={schedFStore||""} onChange={e=>setSchedFStore(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
           <option value="">🏪 Все магазины</option>
@@ -252,15 +305,17 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     const pkg=pkgObj(sc.package_id);
                     const sup=supByPkg(sc.package_id);
                     const delivDays:number[]=Array.isArray(sc.delivery_days)?sc.delivery_days:[];
-                    const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr);
+                    const hasOrder=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr&&o.status!=="skipped");
+                    const isSkipped=orders.some(o=>o.package_id===sc.package_id&&o.store_id===sc.store_id&&o.order_date===day.dateStr&&o.status==="skipped");
                     // Агенты этого пакета
                     const pkgAgents=agentPkgs.filter((ap:any)=>ap.package_id===sc.package_id).map((ap:any)=>agents.find((a:any)=>a.id===ap.agent_id)).filter(Boolean);
                     return(
                       <div key={sc.id} style={{
-                        background: hasOrder ? C.gnBg : C.w,
-                        border: `1px solid ${hasOrder?C.gnBd:C.bdr}`,
+                        background: hasOrder ? C.gnBg : isSkipped ? C.lt : C.w,
+                        border: `1px solid ${hasOrder?C.gnBd:isSkipped?C.bdr:C.bdr}`,
                         borderRadius:10, padding:"10px 16px",
                         display:"flex", alignItems:"center", gap:12, flexWrap:"wrap",
+                        opacity: isSkipped ? 0.6 : 1,
                       }}>
                         <div style={{flex:1,minWidth:200}}>
                           <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>
@@ -277,14 +332,23 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                         </div>
                         {hasOrder
                           ?<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="✓ Заказ создан"/>
-                          :<button onClick={()=>{
-                            setOrderF({package_id:sc.package_id,store_id:sc.store_id,
-                              order_date:day.dateStr,status:"sent",
-                              expected_delivery_date:"",amount_ordered:"",notes:""});
-                            setOrderModal("add");
-                          }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                            + Заказать
-                          </button>
+                          :isSkipped
+                          ?<Bdg c={C.mu} bg={C.lt} bd={C.bdr} ch="⏭ Пропущен"/>
+                          :<div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>{
+                              setOrderF({package_id:sc.package_id,store_id:sc.store_id,
+                                order_date:day.dateStr,status:"sent",
+                                expected_delivery_date:"",amount_ordered:"",notes:""});
+                              setOrderModal("add");
+                            }} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                              + Заказать
+                            </button>
+                            <button onClick={()=>skipOrder(sc.package_id,sc.store_id,day.dateStr)}
+                              style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"7px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+                              title="Пропустить этот заказ — товар не нужен">
+                              ⏭ Пропустить
+                            </button>
+                          </div>
                         }
                       </div>
                     );
@@ -308,13 +372,25 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // TAB: ЗАКАЗЫ
   // ════════════════════════════════════════════════════════════════
   function renderOrders(){
-    const vis = isAdmin ? orders.filter(o=>o.store_id===myStoreId) : orders;
+    const activeStoreFilter = isAdmin ? myStoreId : ordersStoreFilter;
+    const vis = orders
+      .filter(o=>!!pkgObj(o.package_id)&&o.status!=="skipped")
+      .filter(o=>!activeStoreFilter||o.store_id===activeStoreFilter);
+
+    const noShowCount = vis.filter(o=>o.status==="no_show").length;
+
     return(<div>
       <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        <button onClick={()=>{setOrderF({order_date:today,status:"sent",amount_ordered:"",expected_delivery_date:"",notes:"",created_by_role:isAdmin?"admin":"purchaser"});setOrderModal("add");}}
+        {!isAdmin&&<button onClick={()=>{setOrderF({order_date:today,status:"sent",amount_ordered:"",expected_delivery_date:"",notes:"",created_by_role:"purchaser"});setOrderModal("add");}}
           style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           + Заказ
-        </button>
+        </button>}
+        {!isAdmin&&<select value={ordersStoreFilter||""} onChange={e=>setOrdersStoreFilter(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
+          <option value="">🏪 Все магазины</option>
+          {stores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>}
+        {isAdmin&&<div style={{fontSize:12,color:C.md,fontWeight:600}}>🏪 {sn(myStoreId)}</div>}
+        {noShowCount>0&&<span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>⚠️ Не пришло: {noShowCount}</span>}
         <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>{vis.length} заказов</span>
       </div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
@@ -322,27 +398,26 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           <thead><tr><TH ch="Дата"/><TH ch="Поставщик › Пакет"/><TH ch="Магазин"/><TH ch="Сумма заказа"/><TH ch="Ожид. поставка"/><TH ch="Статус"/><TH ch=""/></tr></thead>
           <tbody>{vis.map((o:any,i:number)=>{
             const st=STATUS_ORDER[o.status]||STATUS_ORDER.sent;
-            return(<tr key={o.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
+            const isNoShow = o.status==="no_show";
+            return(<tr key={o.id} style={{background:isNoShow?C.amBg:i%2===0?C.w:"#fafbfc"}}>
               <TD ch={<span style={{fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(o.order_date)}</span>}/>
-              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{pkgLabel(o.package_id)}{isPrepay(o.package_id)&&<PrepayBadge/>}</div>{o.notes&&<div style={{fontSize:10,color:C.mu}}>{o.notes}</div>}</div>}/>
+              <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{pkgLabel(o.package_id)}{isPrepay(o.package_id)&&<PrepayBadge/>}</div>{o.notes&&o.notes!=="Пропущен вручную"&&<div style={{fontSize:10,color:C.mu}}>{o.notes}</div>}</div>}/>
               <TD ch={<span style={{fontSize:11,color:C.md}}>{o.store_id?sn(o.store_id):<span style={{color:C.mu,fontStyle:"italic"}}>Все</span>}</span>}/>
               <TD ch={<strong style={{fontSize:12}}>{o.amount_ordered?fmt(o.amount_ordered)+" ₸":"—"}</strong>}/>
               <TD ch={<span style={{fontSize:11,color:C.md}}>{o.expected_delivery_date?fmtDate(o.expected_delivery_date):"—"}</span>}/>
               <TD ch={<Bdg c={st.c} bg={st.bg} bd={st.bd} ch={st.l}/>}/>
-              <TD ch={<div style={{display:"flex",gap:4}}>
-                <button onClick={()=>{setOrderF({...o});setOrderModal(o);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>
+              <TD ch={<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {!isAdmin&&<button onClick={()=>{setOrderF({...o});setOrderModal(o);}} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✎</button>}
                 {o.status==="sent"&&(()=>{
                   const pkg=pkgObj(o.package_id);
                   if(pkg?.prepayment){
-                    // Предоплата: проверяем есть ли уже счёт
                     const existInv=invoices.find((inv:any)=>inv.order_id===o.id);
                     if(existInv){
                       const isPaid=existInv.status==="paid";
-                      return <span style={{background:isPaid?C.gnBg:C.puBg,border:`1px solid ${isPaid?C.gnBd:C.puBd}`,color:isPaid?C.gn:C.pu,padding:"3px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>
-                        {isPaid?"✅ Счёт оплачен":"⏳ Ожидает оплаты"}
-                      </span>;
+                      if(isPaid) return <span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>✅ Счёт оплачен</span>;
+                      return <span style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"3px 8px",borderRadius:5,fontSize:10,fontWeight:700}}>⏳ Ожидает оплаты</span>;
                     }
-                    return <button onClick={()=>{
+                    if(!isAdmin) return <button onClick={()=>{
                       setInvoiceF({order_id:o.id,package_id:o.package_id,supplier_id:pkg.supplier_id,
                         store_id:o.store_id||"",invoice_date:today,invoice_number:"",
                         amount:o.amount_ordered||"",notes:"",status:"awaiting_payment"});
@@ -350,8 +425,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     }} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>
                       📋 Выставить счёт
                     </button>;
+                    return null;
                   }
-                  // Обычная оплата — принять как раньше
                   const daysToAdd=pkg?.payment_days||0;
                   const due=new Date(); due.setDate(due.getDate()+daysToAdd);
                   return <button onClick={()=>{
@@ -364,6 +439,20 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     🚚 Принять
                   </button>;
                 })()}
+                {o.status==="sent"&&<button onClick={async()=>{
+                  await sb.from("sup_orders").update({status:"no_show"}).eq("id",o.id);
+                  setOrders(orders.map((x:any)=>x.id===o.id?{...x,status:"no_show"}:x));
+                }} style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}
+                  title="Товар не пришёл">
+                  ⚠️ Не пришло
+                </button>}
+                {o.status==="no_show"&&<button onClick={async()=>{
+                  await sb.from("sup_orders").update({status:"sent"}).eq("id",o.id);
+                  setOrders(orders.map((x:any)=>x.id===o.id?{...x,status:"sent"}:x));
+                }} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit"}}
+                  title="Вернуть в статус Отправлен">
+                  ↩ Вернуть
+                </button>}
                 <button onClick={()=>setDelOrdM(o)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>🗑</button>
               </div>}/>
             </tr>);
@@ -385,6 +474,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const prepayDeliveries = deliveries.filter(d=>d.invoice_id);
     const paidPendingInvoices = invoices.filter((inv:any)=>{
       if(inv.status!=="paid") return false;
+      if(!pkgObj(inv.package_id)) return false; // пакет удалён — не показываем
       const hasDelivery = prepayDeliveries.some((d:any)=>d.invoice_id===inv.id);
       if(hasDelivery) return false;
       if(isAdmin){ const invStoreId=inv.store_id; return !invStoreId||invStoreId===myStoreId; }
@@ -496,7 +586,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     const overdue = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date<today);
     const dueWeek = deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr);
     const upcoming= deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")&&(!d.payment_due_date||d.payment_due_date>weekStr));
-    const awaitingPayment = invoices.filter((inv:any)=>inv.status==="awaiting_payment");
+    const awaitingPayment = invoices.filter((inv:any)=>inv.status==="awaiting_payment"&&!!pkgObj(inv.package_id));
     return(<div>
       {/* ══ СЧЕТА НА ПРЕДОПЛАТУ ══ */}
       {awaitingPayment.length>0&&<div style={{background:"#fdf4ff",border:"2px solid #c4b5fd",borderRadius:14,padding:"14px 16px",marginBottom:20}}>
@@ -545,44 +635,96 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           + Оплата поставщику
         </button>
+        <select value={paySupFilter||""} onChange={e=>setPaySupFilter(e.target.value?+e.target.value:0)} style={I({width:"auto"})}>
+          <option value="">🏭 Все поставщики</option>
+          {suppliers.filter((s:any)=>s.active).map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {paySupFilter>0&&<button onClick={()=>setPaySupFilter(0)} style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"5px 10px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕ Сбросить</button>}
         <span style={{marginLeft:"auto",fontSize:11,color:C.mu}}>
           Общий долг: <strong style={{color:totalDebt>0?C.rd:C.gn}}>{fmt(totalDebt)} ₸</strong>
         </span>
       </div>
 
-      {/* Три колонки дашборда */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
-        <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.rd,marginBottom:6}}>⚠️ ПРОСРОЧЕНО</div>
-          {overdue.length===0?<div style={{fontSize:11,color:C.mu}}>Нет просрочек</div>:overdue.map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.rdBd}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.rd}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.am,marginBottom:6}}>📅 НА ЭТОЙ НЕДЕЛЕ</div>
-          {dueWeek.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:dueWeek.map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.amBd}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.am}}>{fmt(d.amount_invoiced)} ₸ · до {fmtDate(d.payment_due_date)}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{background:C.lt,border:`1px solid ${C.bdr}`,borderRadius:12,padding:"12px 16px"}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.md,marginBottom:6}}>📆 ПРЕДСТОЯЩИЕ</div>
-          {upcoming.length===0?<div style={{fontSize:11,color:C.mu}}>Ничего</div>:upcoming.slice(0,5).map((d:any)=>(
-            <div key={d.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.bdr}`}}>
-              <div style={{fontSize:11,fontWeight:600}}>{pkgLabel(d.package_id)}</div>
-              <div style={{fontSize:11,color:C.md}}>{fmt(d.amount_invoiced)} ₸{d.payment_due_date&&` · до ${fmtDate(d.payment_due_date)}`}</div>
-              <div style={{fontSize:10,color:C.mu}}>{sn(d.store_id)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* ══ ДАШБОРД ПО ПОСТАВЩИКАМ ══ */}
+      {(()=>{
+        // Все непогашенные поставки (без предоплатных) сортируем по дате оплаты
+        const allPending = deliveries
+          .filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy"))
+          .sort((a:any,b:any)=>(a.payment_due_date||"9999")>(b.payment_due_date||"9999")?1:-1);
+
+        // Считаем баланс по каждому поставщику (оплачено минус накладные) — исключаем предоплатные платежи
+        const balanceBySup:{[id:number]:number} = {};
+        suppliers.forEach((s:any)=>{ balanceBySup[s.id]=0; });
+        payments.filter((p:any)=>!p.invoice_id).forEach((p:any)=>{ if(balanceBySup[p.supplier_id]!==undefined) balanceBySup[p.supplier_id]+=Number(p.amount); });
+        deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy"))
+          .forEach((d:any)=>{ const p=pkgObj(d.package_id); if(p&&balanceBySup[p.supplier_id]!==undefined) balanceBySup[p.supplier_id]-=Number(d.amount_invoiced); });
+
+        // Для каждой поставки определяем покрыта ли она — идём по поставщику, применяем оплаты к накладным в порядке срока
+        const coveredIds = new Set<number>();
+        const supDelivs:{[id:number]:any[]} = {};
+        allPending.forEach((d:any)=>{ const p=pkgObj(d.package_id); if(p){ if(!supDelivs[p.supplier_id])supDelivs[p.supplier_id]=[]; supDelivs[p.supplier_id].push(d); } });
+        Object.keys(supDelivs).forEach(sid=>{
+          const supId=+sid;
+          let running = payments.filter((p:any)=>p.supplier_id===supId&&!p.invoice_id).reduce((s:number,p:any)=>s+Number(p.amount),0);
+          supDelivs[supId].forEach((d:any)=>{
+            if(running>=Number(d.amount_invoiced)){ coveredIds.add(d.id); running-=Number(d.amount_invoiced); }
+            else running=0;
+          });
+        });
+
+        const activeSups = suppliers.filter((s:any)=>
+          allPending.some((d:any)=>{ const p=pkgObj(d.package_id); return p?.supplier_id===s.id; }) &&
+          (!paySupFilter || s.id===paySupFilter)
+        );
+        if(activeSups.length===0&&overdue.length===0) return null;
+
+        return(<div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+          {activeSups.map((sup:any)=>{
+            const supDelivsList = allPending.filter((d:any)=>pkgObj(d.package_id)?.supplier_id===sup.id);
+            const totalInvoiced = supDelivsList.reduce((s:number,d:any)=>s+Number(d.amount_invoiced),0);
+            const totalPaid = payments.filter((p:any)=>p.supplier_id===sup.id&&!p.invoice_id).reduce((s:number,p:any)=>s+Number(p.amount),0);
+            const remaining = totalInvoiced - totalPaid;
+            const surplus = totalPaid - totalInvoiced;
+            const allCovered = supDelivsList.every((d:any)=>coveredIds.has(d.id));
+
+            return(<div key={sup.id} style={{background:C.w,border:`2px solid ${allCovered?C.gnBd:remaining>0?C.amBd:C.bdr}`,borderRadius:12,overflow:"hidden"}}>
+              {/* Шапка поставщика */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:allCovered?C.gnBg:remaining>0?C.amBg:C.lt,flexWrap:"wrap",gap:8}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.tx}}>{sup.name}</div>
+                <div style={{display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+                  <div style={{fontSize:11,color:C.mu}}>Накладных: <strong style={{color:C.tx}}>{fmt(totalInvoiced)} ₸</strong></div>
+                  <div style={{fontSize:11,color:C.mu}}>Оплачено: <strong style={{color:C.gn}}>{fmt(totalPaid)} ₸</strong></div>
+                  {allCovered
+                    ? <span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>✅ Всё закрыто{surplus>1&&` · остаток ${fmt(surplus)} ₸`}</span>
+                    : <span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>⚠️ Осталось {fmt(remaining)} ₸</span>
+                  }
+                </div>
+              </div>
+              {/* Список накладных */}
+              <div style={{padding:"8px 16px",display:"flex",flexDirection:"column",gap:6}}>
+                {supDelivsList.map((d:any)=>{
+                  const isCovered = coveredIds.has(d.id);
+                  const isOverdueD = d.payment_due_date&&d.payment_due_date<today;
+                  const isThisWeek = d.payment_due_date&&d.payment_due_date>=today&&d.payment_due_date<=weekStr;
+                  const tag = isOverdueD?"⚠️ Просрочено":isThisWeek?"📅 На этой неделе":"📆 Предстоящее";
+                  const tagColor = isOverdueD?C.rd:isThisWeek?C.am:C.mu;
+                  return(<div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",borderBottom:`1px solid ${C.lt}`,flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:150}}>
+                      <div style={{fontSize:12,fontWeight:600,color:isCovered?C.mu:C.tx,textDecoration:isCovered?"line-through":"none"}}>{pkgLabel(d.package_id)}</div>
+                      <div style={{fontSize:10,color:C.mu,marginTop:1}}>{sn(d.store_id)}{d.payment_due_date&&<span style={{color:tagColor}}> · до {fmtDate(d.payment_due_date)}</span>}</div>
+                    </div>
+                    <div style={{fontSize:12,fontWeight:700,color:isCovered?C.mu:C.tx,textDecoration:isCovered?"line-through":"none"}}>{fmt(d.amount_invoiced)} ₸</div>
+                    {isCovered
+                      ? <span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>✅ Покрыто</span>
+                      : <span style={{background:isOverdueD?C.rdBg:isThisWeek?C.amBg:C.lt,border:`1px solid ${isOverdueD?C.rdBd:isThisWeek?C.amBd:C.bdr}`,color:tagColor,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{tag}</span>
+                    }
+                  </div>);
+                })}
+              </div>
+            </div>);
+          })}
+        </div>);
+      })()}
 
       {/* Таблица долга по поставщикам */}
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
@@ -788,6 +930,12 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     setDelPkgM(null);
   }
   async function deleteOrder(o:any){
+    // Удаляем связанный счёт если он не оплачен
+    const linkedInv = invoices.find((inv:any)=>inv.order_id===o.id);
+    if(linkedInv){
+      await sb.from("sup_invoices").delete().eq("id",linkedInv.id);
+      setInvoices(invoices.filter((inv:any)=>inv.id!==linkedInv.id));
+    }
     await sb.from("sup_orders").delete().eq("id",o.id);
     setOrders(orders.filter((x:any)=>x.id!==o.id));
     setDelOrdM(null);
@@ -803,6 +951,11 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
     setDelDelvM(null);
   }
   async function deletePayment(p:any){
+    // Если оплата была по счёту — возвращаем счёт в "awaiting_payment"
+    if(p.invoice_id){
+      await sb.from("sup_invoices").update({status:"awaiting_payment",paid_at:null}).eq("id",p.invoice_id);
+      setInvoices(invoices.map((inv:any)=>inv.id===p.invoice_id?{...inv,status:"awaiting_payment",paid_at:null}:inv));
+    }
     await sb.from("sup_payments").delete().eq("id",p.id);
     setPayments(payments.filter((x:any)=>x.id!==p.id));
     setDelPayM(null);
@@ -1209,7 +1362,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         <div style={{fontSize:28,marginBottom:8}}>🗑️</div>
         <div style={{fontWeight:800,fontSize:14,marginBottom:6}}>Удалить заказ?</div>
         <div style={{fontSize:12,color:C.md,marginBottom:4}}>{pkgLabel(delOrdM.package_id)}</div>
-        <div style={{fontSize:11,color:C.mu,marginBottom:14}}>{fmtDate(delOrdM.order_date)} · {delOrdM.amount_ordered?fmt(delOrdM.amount_ordered)+" ₸":"б/с"}</div>
+        <div style={{fontSize:11,color:C.mu,marginBottom:10}}>{fmtDate(delOrdM.order_date)} · {delOrdM.amount_ordered?fmt(delOrdM.amount_ordered)+" ₸":"б/с"}</div>
+        {invoices.some((inv:any)=>inv.order_id===delOrdM.id)&&<div style={{background:"#fdf4ff",border:"1px solid #e9d5ff",borderRadius:8,padding:"8px 12px",fontSize:11,color:C.pu,marginBottom:14,textAlign:"left"}}>💜 Связанный счёт на предоплату тоже будет удалён.</div>}
         <div style={{display:"flex",gap:7}}>
           <button onClick={()=>setDelOrdM(null)} style={{flex:1,background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"8px",borderRadius:7,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Отмена</button>
           <button onClick={()=>deleteOrder(delOrdM)} style={{flex:1,background:C.rd,border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Удалить</button>
