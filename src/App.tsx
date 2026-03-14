@@ -13,32 +13,35 @@ const sb = createClient(SUPA_URL, SUPA_KEY);
 // owner  — всё, все магазины
 // manager — только свой магазин: ввод, выручка, отчёт по магазину
 // admin  — только ввод смен своего магазина
-const ROLE_LABELS = { owner:"👑 Владелец", manager:"🏪 Управляющий", admin:"📋 Администратор" };
+// ══ Роли: owner, manager, admin, buyer, accountant ══
+const ROLE_LABELS = {
+  owner:     "👑 Владелец",
+  manager:   "🏪 Управляющий",
+  admin:     "📋 Администратор",
+  buyer:     "📦 Закупщик",
+  accountant:"💰 Бухгалтер",
+};
 
 // ══ Система прав доступа ══
-// permissions JSON — Персонал: shifts, reports, debts, refs
-//                  — Закупки:  sup_schedule, sup_orders, sup_deliveries, sup_payments, sup_refs
-// 0=нет, 1=просмотр, 2=редактирование, 3=полный(+удаление)
-function getPerm(user, mod) {
+// permissions JSON — 11 ключей, значения: 0=нет, 1=просмотр, 2=редактирование
+// Ключи: shifts, revenue, schedule, reports_store, reports_emp, reports_payroll,
+//        refs, debts, sup_orders, sup_receiving, sup_payments
+// owner и manager всегда имеют полный доступ (уровень 2) ко всему автоматически
+// store_ids: [] — пустой массив = все магазины; заполненный = только указанные
+
+function getPerm(user: any, mod: string): number {
   if (!user) return 0;
-  if (user.role === "owner") return 3;
+  if (user.role === "owner" || user.role === "manager") return 2;
   return (user.permissions || {})[mod] || 0;
 }
-function canView(user, mod)   { return getPerm(user, mod) >= 1; }
-function canEdit(user, mod)   { return getPerm(user, mod) >= 2; }
-function canDelete(user, mod) { return getPerm(user, mod) >= 3; }
-function canAccessStore(user, storeId) {
+function canView(user: any, mod: string)  { return getPerm(user, mod) >= 1; }
+function canEdit(user: any, mod: string)  { return getPerm(user, mod) >= 2; }
+function canAccessStore(user: any, storeId: number): boolean {
   if (!user) return false;
-  if (user.role === "owner") return true;
-  const ids = user.store_ids || [];
-  if (ids.length > 0) return ids.includes(storeId);
-  return !user.store_id || user.store_id === storeId; // backward compat
-}
-function canDo(role, action) {
-  if (role === "owner")   return true;
-  if (role === "manager") return true;
-  if (role === "admin")   return ["input","report_store","report_emp"].includes(action);
-  return false;
+  if (user.role === "owner" || user.role === "manager") return true;
+  const ids: number[] = Array.isArray(user.store_ids) ? user.store_ids : [];
+  if (ids.length === 0) return true; // пустой массив = все магазины
+  return ids.includes(storeId);
 }
 
 // ═══ EXCEL EXPORT (SheetJS via CDN — грузится динамически) ═══
@@ -564,7 +567,16 @@ export default function App() {
       setPositions(poss);
       setEmps(empsData);
       setShifts(shData);
-      if (sts.length > 0) { setStore(s => s || sts[0].id); setSchedStore(s => s || sts[0].id); setRepS(s => s || sts[0].id); }
+      if (sts.length > 0) {
+        // Первый доступный магазин определяется после загрузки appUser
+        const storeIdsForUser: number[] = Array.isArray(appUser?.store_ids) ? appUser.store_ids : [];
+        const isOM = appUser?.role === "owner" || appUser?.role === "manager";
+        const accessible = (isOM || storeIdsForUser.length === 0) ? sts : sts.filter((s: any) => storeIdsForUser.includes(s.id));
+        const first = accessible[0]?.id || sts[0].id;
+        setStore((s: any) => s || first);
+        setSchedStore((s: any) => s || first);
+        setRepS((s: any) => s || first);
+      }
 
       // Выручка → {storeId: {date: amount}}
       const revMap = {};
@@ -773,17 +785,16 @@ export default function App() {
     setCleanupInput("");
   }
 
-  async function saveUserRole(userId, role, storeId) {
-    await sb.from("app_users").update({
-      role, store_id: role === "owner" ? null : (storeId || null)
-    }).eq("id", userId);
+  async function saveUserRole(userId: string, role: string, storeIds: number[] = []) {
+    await sb.from("app_users").update({ role, store_ids: storeIds }).eq("id", userId);
     loadAppUsers();
     setEditUser(null);
   }
   async function saveUserPerms(u, updates) {
-    await sb.from("app_users").update(updates).eq("id", u.id);
+    const { error } = await sb.from("app_users").update(updates).eq("id", u.id);
+    if (error) { alert("Ошибка сохранения: " + error.message); return; }
     const updated = {...u, ...updates};
-    setAppUsers(appUsers.map(x => x.id===u.id ? updated : x));
+    setAppUsers((prev: any[]) => prev.map((x: any) => x.id===u.id ? updated : x));
     setEditUserModal(updated);
     if (u.id === appUser?.id) setAppUser({...appUser, ...updates});
   }
@@ -1082,8 +1093,9 @@ export default function App() {
     </div>
   );
 
-  const role = appUser?.role || "admin";
-  const myStoreId = appUser?.store_id || null;
+  const role: string = appUser?.role || "admin";
+  const isOwnerOrManager = role === "owner" || role === "manager";
+  const myStoreIds: number[] = Array.isArray(appUser?.store_ids) ? appUser.store_ids : [];
 
   // ── РЕНДЕР ВКЛАДОК ────────────────────────────────────────────────────────
   function renderInput() {
@@ -1095,7 +1107,7 @@ export default function App() {
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:10,padding:"11px 14px",marginBottom:12,display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap",position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 8px rgba(0,0,0,.04)"}}>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МАГАЗИН</div>
           <select value={store||""} onChange={e=>setStore(+e.target.value)} style={I({width:170,fontWeight:600})}>
-            {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            {visibleStores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>ДАТА</div>
@@ -1321,7 +1333,7 @@ export default function App() {
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>СОТРУДНИК</div>
           <select value={repE?.id||""} onChange={e=>setRepE(emps.find(x=>x.id===+e.target.value)||null)} style={I({width:230})}>
             <option value="">— выберите —</option>
-            {emps.map(e=><option key={e.id} value={e.id}>{fullName(e)}{!e.active?" (ув.)":""}</option>)}
+            {emps.filter((e:any)=>isOwnerOrManager||myStoreIds.length===0||myStoreIds.includes(e.default_store)).map((e:any)=><option key={e.id} value={e.id}>{fullName(e)}{!e.active?" (ув.)":""}</option>)}
           </select>
         </div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МЕСЯЦ</div><input type="month" value={repMo} onChange={e=>setRepMo(e.target.value)} style={I({width:155})}/></div>
@@ -1388,7 +1400,7 @@ export default function App() {
     const totalRev = Object.entries(revenue[repS]||{}).filter(([d])=>d>=repF&&d<=repT).reduce((s,[,v])=>s+v,0);
     return(<div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:10,padding:"11px 14px",marginBottom:12,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
-        <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МАГАЗИН</div><select value={repS||""} onChange={e=>setRepS(+e.target.value)} style={I({width:160})}>{stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+        <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МАГАЗИН</div><select value={repS||""} onChange={e=>setRepS(+e.target.value)} style={I({width:160})}>{visibleStores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>С</div><input type="date" value={repF} onChange={e=>setRepF(e.target.value)} style={I({width:148})}/></div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>ПО</div><input type="date" value={repT} onChange={e=>setRepT(e.target.value)} style={I({width:148})}/></div>
         <div style={{marginLeft:"auto"}}>
@@ -1581,29 +1593,33 @@ export default function App() {
     </div>);
   }
 
-  // Фильтруем вкладки по роли
-  // Флаги доступа
-  const isOwner      = role==="owner" || role==="manager";
-  const canSuppliers = role==="owner" || canView(appUser,"suppliers")
-    || canView(appUser,"sup_schedule") || canView(appUser,"sup_orders")
-    || canView(appUser,"sup_deliveries") || canView(appUser,"sup_payments") || canView(appUser,"sup_refs");
-  const canFinance   = role==="owner" || canView(appUser,"reports");
-  // backward compat
-  const _canSuppliersBk = isOwner || appUser?.access_suppliers===true || appUser?.access_finance===true;
-  const _canFinanceBk   = isOwner || appUser?.access_finance===true;
-  const showSuppliers = canSuppliers || _canSuppliersBk;
-  const showReports   = canFinance || _canFinanceBk || (role==="admin"&&!hasAnyPerm);
-  const showDebts     = role==="owner" || canView(appUser,"debts") || appUser?.access_debts===true;
-  const showRefs      = role==="owner" || role==="manager" || canView(appUser,"refs") || (role==="admin"&&!hasAnyPerm);
-  const hasAnyPerm    = Object.values(appUser?.permissions||{}).some((v:any)=>v>0);
-  // Если у admin нет настроенных прав — показываем смены по умолчанию (backward compat)
-  // Если права настроены — строго по ним
-  const showShifts    = role==="owner" || role==="manager"
-    || canView(appUser,"shifts")
-    || (role==="admin" && !hasAnyPerm);
+  // ── Флаги доступа к разделам (чистая единая система) ────────────────────
+  const showShifts    = isOwnerOrManager || canView(appUser, "shifts");
+  const showSchedule  = isOwnerOrManager;
+  const showReports   = isOwnerOrManager || canView(appUser, "reports_store") || canView(appUser, "reports_emp");
+  const showPayroll   = isOwnerOrManager; // зарплатная ведомость — только owner/manager
+  const showRefs      = isOwnerOrManager || canView(appUser, "refs");
+  const showDebts     = isOwnerOrManager || canView(appUser, "debts");
+  const showSuppliers = isOwnerOrManager
+    || canView(appUser, "sup_orders")
+    || canView(appUser, "sup_receiving")
+    || canView(appUser, "sup_payments")
+    || canView(appUser, "sup_refs");
 
-  // manager/admin видит только свой магазин
-  const visibleStores = role === "owner" ? stores : stores.filter((s:any) => s.id === myStoreId);
+  // Автоматически переключаем на первый доступный раздел
+  const tabAccessMap: Record<string,boolean> = {
+    input: showShifts, sched: showSchedule, reports: showReports,
+    refs: showRefs, debts: showDebts, suppliers: showSuppliers,
+  };
+  if (!tabAccessMap[tab]) {
+    const firstTab = ["input","suppliers","reports","refs","debts","sched"].find(t => tabAccessMap[t]);
+    if (firstTab && firstTab !== tab) setTab(firstTab);
+  }
+
+  // Магазины которые видит пользователь
+  const visibleStores = (isOwnerOrManager || myStoreIds.length === 0)
+    ? stores
+    : stores.filter((s: any) => myStoreIds.includes(s.id));
 
   // ── Группы навигации ─────────────────────────────────────────────────────
   const NAV_GROUPS = [
@@ -1611,7 +1627,7 @@ export default function App() {
       key: "hr", label: "👥 Персонал", color: C.or,
       items: [
         {k:"input",   l:"🏪 Ввод смен",    show: showShifts},
-        {k:"sched",   l:"📅 Расписание",   show: role==="owner"||role==="manager"},
+        {k:"sched",   l:"📅 Расписание",   show: showSchedule},
         {k:"reports", l:"📊 Отчёты",       show: showReports},
         {k:"refs",    l:"📚 Справочники",  show: showRefs},
         {k:"debts",   l:"💳 Задолженности",show: showDebts},
@@ -1753,7 +1769,7 @@ export default function App() {
       {tab==="reports"&&(<div>
         <div style={{marginBottom:14}}><h2 style={{margin:"0 0 10px",fontSize:16,fontWeight:800}}>📊 Отчёты</h2>
           <div style={{background:C.lt,borderRadius:10,padding:4,display:"inline-flex",gap:2}}>
-            {REP_TABS.filter(t=>!(role==="admin"&&t.k==="pay")).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
+            {REP_TABS.filter(t=>!(t.k==="pay"&&!showPayroll)).map(t=><button key={t.k} onClick={()=>setRepTab(t.k)} style={subTabBtn(repTab===t.k)}>{t.l}</button>)}
           </div>
         </div>
         {repTab==="erep"&&renderErep()}
@@ -2026,11 +2042,15 @@ export default function App() {
           const isMe = u.id===appUser?.id;
           const isOwnerUser = u.role==="owner";
           const storeIds:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
-          const storeLabel = isOwnerUser?"Все магазины":storeIds.length>0?storeIds.map(id=>sn(id)).join(", "):u.store_id?sn(u.store_id):"Не назначен";
+          const storeLabel = (isOwnerUser || u.role==="manager")?"Все магазины":storeIds.length>0?storeIds.map((id:number)=>sn(id)).filter(Boolean).join(", "):"Не назначены";
           const perms = u.permissions||{};
-          const PERM_NAMES = ["","👁 Просмотр","✏️ Редакт.","🗑 Удаление"];
-          const MODS = [{k:"shifts",l:"🏪 Смены"},{k:"reports",l:"📊 Отчёты"},{k:"debts",l:"💳 Долги"},{k:"refs",l:"📚 Справочники"},
-            {k:"sup_schedule",l:"📅 График"},{k:"sup_orders",l:"📦 Заказы"},{k:"sup_deliveries",l:"🚚 Поставки"},{k:"sup_payments",l:"💰 Оплаты"},{k:"sup_refs",l:"⚙️ Справочник"}];
+          const PERM_NAMES = ["","👁 Просмотр","✏️ Редакт."];
+          const MODS = [
+            {k:"shifts",l:"🏪 Смены"},{k:"revenue",l:"💵 Выручка"},
+            {k:"reports_store",l:"📊 Отчёт маг."},{k:"reports_emp",l:"👤 Отчёт сотр."},
+            {k:"refs",l:"📚 Справочники"},{k:"debts",l:"💳 Долги"},
+            {k:"sup_orders",l:"📦 Заказы"},{k:"sup_receiving",l:"🚚 Приёмка"},{k:"sup_payments",l:"💰 Оплаты"},{k:"sup_refs",l:"⚙️ Справочник"},
+          ];
           return(<div key={u.id} onClick={()=>!isOwnerUser&&!isMe&&setEditUserModal(u)}
             style={{background:isMe?C.orBg:C.w,border:`1px solid ${isMe?C.orBd:C.bdr}`,borderRadius:12,padding:"12px 16px",cursor:isOwnerUser||isMe?"default":"pointer",transition:"box-shadow .15s"}}
             onMouseEnter={e=>{if(!isOwnerUser&&!isMe)(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(0,0,0,.08)";}}
@@ -2043,7 +2063,7 @@ export default function App() {
                 <div style={{fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:8}}>
                   {u.full_name||"—"}
                   {isMe&&<span style={{background:C.orBg,border:`1px solid ${C.orBd}`,color:C.or,fontSize:9,padding:"1px 6px",borderRadius:20,fontWeight:700}}>вы</span>}
-                  <Bdg c={u.role==="owner"?C.or:u.role==="manager"?C.bl:C.pu} bg={u.role==="owner"?C.orBg:u.role==="manager"?C.blBg:C.puBg} bd={u.role==="owner"?C.orBd:u.role==="manager"?C.blBd:C.puBd} ch={ROLE_LABELS[u.role]||u.role}/>
+                  {(()=>{const rc=u.role==="owner"?[C.or,C.orBg,C.orBd]:u.role==="manager"?[C.bl,C.blBg,C.blBd]:u.role==="buyer"?[C.gn,C.gnBg,C.gnBd]:u.role==="accountant"?[C.am,C.amBg,C.amBd]:[C.pu,C.puBg,C.puBd];return<Bdg c={rc[0]} bg={rc[1]} bd={rc[2]} ch={ROLE_LABELS[u.role]||u.role}/>;})()}
                 </div>
                 <div style={{fontSize:11,color:C.mu,marginTop:2}}>{u.email} · {storeLabel}</div>
               </div>
@@ -2070,32 +2090,39 @@ export default function App() {
       {
         key:"hr", label:"👥 Персонал", color:C.or, bg:C.orBg, bd:C.orBd,
         mods:[
-          {k:"shifts",       l:"🏪 Ввод смен",     desc:"Добавление, изменение, удаление смен"},
-          {k:"reports",      l:"📊 Отчёты",        desc:"Просмотр отчётов и зарплатных данных"},
-          {k:"debts",        l:"💳 Задолженности", desc:"Долги сотрудников, начисления, удержания"},
-          {k:"refs",         l:"📚 Справочники",   desc:"Сотрудники, магазины, должности"},
+          {k:"shifts",          l:"🏪 Ввод смен",        desc:"Добавление, редактирование смен"},
+          {k:"revenue",         l:"💵 Ввод выручки",      desc:"Ввод дневной выручки по магазину"},
+          {k:"reports_store",   l:"📊 Отчёт по магазину", desc:"Отчёт по смены и ФОТ магазина"},
+          {k:"reports_emp",     l:"👤 Отчёт по сотруднику",desc:"Выписка по конкретному сотруднику"},
+          {k:"refs",            l:"📚 Справочники",       desc:"Сотрудники, магазины, должности"},
+          {k:"debts",           l:"💳 Задолженности",     desc:"Долги сотрудников"},
         ],
       },
       {
         key:"sup", label:"🏭 Закупки", color:C.pu, bg:C.puBg, bd:C.puBd,
         mods:[
-          {k:"sup_schedule", l:"📅 График",        desc:"Расписание поставок по пакетам"},
-          {k:"sup_orders",   l:"📦 Заказы",        desc:"Создание и управление заказами"},
-          {k:"sup_deliveries",l:"🚚 Поставки",     desc:"Приёмка и учёт поставок"},
-          {k:"sup_payments", l:"💰 Оплаты",        desc:"Оплата поставщикам, просмотр долгов"},
-          {k:"sup_refs",     l:"⚙️ Справочник",   desc:"Поставщики, агенты, пакеты, расписание"},
+          {k:"sup_orders",      l:"📦 Заказы",            desc:"Создание и управление заказами товара"},
+          {k:"sup_receiving",   l:"🚚 Приёмка товара",    desc:"Приёмка, возврат поставок в магазине"},
+          {k:"sup_payments",    l:"💰 Оплата поставщикам",desc:"Оплата счетов поставщикам"},
+          {k:"sup_refs",        l:"⚙️ Справочник закупок",desc:"Поставщики, агенты, пакеты, расписание"},
         ],
       },
     ];
     const LEVELS = [
-      {v:0, l:"Нет",          c:C.mu,  bg:C.lt,    bd:C.bdr},
-      {v:1, l:"Просмотр",     c:C.bl,  bg:C.blBg,  bd:C.blBd},
-      {v:2, l:"Редактир.",    c:C.pu,  bg:C.puBg,  bd:C.puBd},
-      {v:3, l:"Полный",       c:C.gn,  bg:C.gnBg,  bd:C.gnBd},
+      {v:0, l:"Нет",       c:C.mu, bg:C.lt,   bd:C.bdr},
+      {v:1, l:"Просмотр",  c:C.bl, bg:C.blBg, bd:C.blBd},
+      {v:2, l:"Редактир.", c:C.gn, bg:C.gnBg, bd:C.gnBd},
     ];
-    async function setRole(role) {
-      const updates:any = {role};
-      if (role==="owner") { updates.store_ids=[]; updates.permissions={}; }
+    const ROLE_DEFAULT_PERMS: Record<string, any> = {
+      owner:      {},
+      manager:    {},
+      admin:      {shifts:2,revenue:2,reports_store:1,reports_emp:1,refs:0,debts:0,sup_orders:0,sup_receiving:2,sup_payments:0},
+      buyer:      {shifts:0,revenue:0,reports_store:0,reports_emp:0,refs:0,debts:0,sup_orders:2,sup_receiving:1,sup_payments:1,sup_refs:2},
+      accountant: {shifts:0,revenue:0,reports_store:0,reports_emp:0,refs:0,debts:0,sup_orders:1,sup_receiving:1,sup_payments:2},
+    };
+    async function setRole(newRole: string) {
+      const updates: any = { role: newRole, permissions: ROLE_DEFAULT_PERMS[newRole] || {} };
+      if (newRole === "owner" || newRole === "manager") updates.store_ids = [];
       await saveUserPerms(u, updates);
     }
     async function setModPerm(mod, level) {
@@ -2126,18 +2153,26 @@ export default function App() {
           <div>
             <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>РОЛЬ</div>
             <div style={{display:"flex",gap:6}}>
-              {([["owner","👑 Владелец",C.or,C.orBg,C.orBd],["manager","🏪 Управляющий",C.bl,C.blBg,C.blBd],["admin","📋 Администратор",C.pu,C.puBg,C.puBd]] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
-                <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"8px 4px",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+              {([
+                ["owner",     "👑 Владелец",    C.or,C.orBg,C.orBd],
+                ["manager",   "🏪 Управляющий", C.bl,C.blBg,C.blBd],
+                ["admin",     "📋 Администратор",C.pu,C.puBg,C.puBd],
+                ["buyer",     "📦 Закупщик",    C.gn,C.gnBg,C.gnBd],
+                ["accountant","💰 Бухгалтер",   C.am,C.amBg,C.amBd],
+              ] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
+                <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"7px 2px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   background:u.role===rv?rbg:C.lt, border:`2px solid ${u.role===rv?rbd:C.bdr}`, color:u.role===rv?rc:C.mu}}>
                   {rl}
                 </button>
               ))}
             </div>
-            {u.role==="owner"&&<div style={{marginTop:8,fontSize:10,color:C.or,background:C.orBg,borderRadius:7,padding:"6px 10px"}}>👑 Владелец имеет полный доступ ко всем модулям и магазинам автоматически.</div>}
+            {(u.role==="owner"||u.role==="manager")&&<div style={{marginTop:8,fontSize:10,color:u.role==="owner"?C.or:C.bl,background:u.role==="owner"?C.orBg:C.blBg,borderRadius:7,padding:"6px 10px"}}>
+              {u.role==="owner"?"👑 Владелец":"🏪 Управляющий"} имеет полный доступ ко всем модулям и магазинам автоматически.
+            </div>}
           </div>
 
           {/* Магазины */}
-          {u.role!=="owner"&&<div>
+          {(u.role!=="owner"&&u.role!=="manager")&&<div>
             <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ДОСТУП К МАГАЗИНАМ</div>
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
               {stores.map(s=>{
@@ -2154,29 +2189,12 @@ export default function App() {
           </div>}
 
           {/* Права по модулям */}
-          {u.role!=="owner"&&<div>
+          {(u.role!=="owner"&&u.role!=="manager")&&<div>
             <div style={{fontSize:10,fontWeight:700,color:C.mu,marginBottom:8,letterSpacing:"0.5px"}}>ПРАВА ДОСТУПА ПО МОДУЛЯМ</div>
 
-            {/* ── Пресеты ── */}
-            <div style={{background:C.lt,borderRadius:9,padding:"10px 12px",marginBottom:10}}>
-              <div style={{fontSize:10,color:C.mu,fontWeight:600,marginBottom:7}}>⚡ Быстрые шаблоны:</div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                {([
-                  {l:"🏪 Администратор магазина", c:C.pu, perms:{shifts:3,reports:1,debts:0,refs:0,sup_schedule:0,sup_orders:0,sup_deliveries:3,sup_payments:0,sup_refs:0}},
-                  {l:"📦 Закупщик",               c:C.bl, perms:{shifts:0,reports:0,debts:0,refs:0,sup_schedule:2,sup_orders:2,sup_deliveries:2,sup_payments:1,sup_refs:1}},
-                  {l:"💰 Бухгалтер",              c:C.gn, perms:{shifts:0,reports:2,debts:1,refs:0,sup_schedule:1,sup_orders:1,sup_deliveries:1,sup_payments:3,sup_refs:0}},
-                  {l:"👀 Только просмотр",        c:C.am, perms:{shifts:1,reports:1,debts:1,refs:1,sup_schedule:1,sup_orders:1,sup_deliveries:1,sup_payments:1,sup_refs:1}},
-                ] as any[]).map(preset=>(
-                  <button key={preset.l} onClick={()=>saveUserPerms(u,{permissions:preset.perms})}
-                    style={{background:C.w,border:`1px solid ${C.bdr}`,color:preset.c,padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                    {preset.l}
-                  </button>
-                ))}
-                <button onClick={()=>saveUserPerms(u,{permissions:{}})}
-                  style={{background:"none",border:`1px solid ${C.bdr}`,color:C.mu,padding:"5px 12px",borderRadius:20,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-                  ✕ Сбросить
-                </button>
-              </div>
+            {/* Подсказка */}
+            <div style={{background:C.lt,borderRadius:9,padding:"9px 12px",marginBottom:10,fontSize:11,color:C.mu}}>
+              💡 Права проставляются автоматически при выборе роли. При необходимости скорректируй вручную ниже.
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {MOD_GROUPS.map(group=>(
@@ -2185,24 +2203,24 @@ export default function App() {
                   <div style={{background:group.bg,padding:"7px 12px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                     <div style={{fontSize:11,fontWeight:700,color:group.color}}>{group.label}</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(4,72px)"}}>
-                      {["Нет","Просмотр","Редакт.","Полный"].map(l=>(
+                      {["Нет","Просмотр","Редактир."].map(l=>(
                         <div key={l} style={{fontSize:9,fontWeight:700,color:C.mu,textAlign:"center"}}>{l}</div>
                       ))}
                     </div>
                   </div>
                   {/* Строки модулей */}
-                  {group.mods.map((m,mi)=>{
+                  {group.mods.map((m: any,mi: number)=>{
                     const cur = perms[m.k]||0;
                     return(<div key={m.k} style={{display:"flex",alignItems:"center",padding:"9px 12px",borderTop:`1px solid ${group.bd}`,background:mi%2===0?C.w:"#fafbfc"}}>
                       <div style={{flex:1}}>
                         <div style={{fontSize:12,fontWeight:600}}>{m.l}</div>
                         <div style={{fontSize:10,color:C.mu}}>{m.desc}</div>
                       </div>
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(4,72px)"}}>
-                        {[0,1,2,3].map(lv=>{
+                      <div style={{width:180,display:"flex"}}>
+                        {[0,1,2].map(lv=>{
                           const active = cur===lv;
-                          const colors = lv===0?[C.mu,C.lt,C.bdr]:lv===1?[C.bl,C.blBg,C.blBd]:lv===2?[C.pu,C.puBg,C.puBd]:[C.gn,C.gnBg,C.gnBd];
-                          return(<div key={lv} style={{display:"flex",justifyContent:"center"}}>
+                          const colors = lv===0?[C.mu,C.lt,C.bdr]:lv===1?[C.bl,C.blBg,C.blBd]:[C.gn,C.gnBg,C.gnBd];
+                          return(<div key={lv} style={{width:60,display:"flex",justifyContent:"center",alignItems:"center"}}>
                             <button onClick={()=>setModPerm(m.k,lv)} style={{width:30,height:30,borderRadius:"50%",border:`2px solid ${active?colors[0]:C.bdr}`,background:active?colors[1]:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:active?colors[0]:C.bdr,fontWeight:700}}>
                               {active?"●":"○"}
                             </button>
