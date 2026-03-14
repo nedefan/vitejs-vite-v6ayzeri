@@ -114,6 +114,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   // Справочники поставщиков — owner/manager + закупщик (sup_refs >= 1)
   const canSeeRefs        = isOwnerOrManager || _pv("sup_refs");
   const canEditRefs       = isOwnerOrManager || _pe("sup_refs");
+  // Начальный долг — только owner/manager/accountant
+  const canEditInitialBalance = isOwnerOrManager || role === "accountant";
 
   // ── load ──────────────────────────────────────────────────────────────────
   const loadAll = useCallback(async()=>{
@@ -151,17 +153,28 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
   const isPrepay  = (pkgId:any) => !!pkgObj(pkgId)?.prepayment;
   const PrepayBadge = () => <span style={{background:"#fdf4ff",border:"1px solid #e9d5ff",color:"#7c3aed",padding:"1px 6px",borderRadius:20,fontSize:9,fontWeight:700,marginLeft:5}}>💳 ПРЕДОПЛАТА</span>;
 
-  // долг по каждому поставщику (только bank deliveries received)
+  // долг по каждому поставщику (начальный остаток + bank deliveries − оплаты)
   const debtBySup = useMemo(()=>{
-    const map:{[id:number]:{total:number,delivs:any[]}} = {};
-    suppliers.forEach(s=>{ map[s.id]={total:0,delivs:[]}; });
+    const map:{[id:number]:{total:number,initial:number,deliveries_sum:number,payments_sum:number,delivs:any[]}} = {};
+    suppliers.forEach(s=>{
+      const init = Number(s.initial_balance)||0;
+      map[s.id]={total:init, initial:init, deliveries_sum:0, payments_sum:0, delivs:[]};
+    });
     deliveries.filter(d=>d.payment_type==="bank"&&!d.invoice_id&&(d.status==="received"||d.status==="discrepancy")).forEach(d=>{
       const p=pkgObj(d.package_id); if(!p)return;
-      if(!map[p.supplier_id]) map[p.supplier_id]={total:0,delivs:[]};
-      map[p.supplier_id].total += Number(d.amount_invoiced);
+      if(!map[p.supplier_id]) map[p.supplier_id]={total:0,initial:0,deliveries_sum:0,payments_sum:0,delivs:[]};
+      const amt = Number(d.amount_invoiced);
+      map[p.supplier_id].total += amt;
+      map[p.supplier_id].deliveries_sum += amt;
       map[p.supplier_id].delivs.push(d);
     });
-    payments.filter(p=>!p.invoice_id).forEach(p=>{ if(map[p.supplier_id]) map[p.supplier_id].total -= Number(p.amount); });
+    payments.filter(p=>!p.invoice_id).forEach(p=>{
+      if(map[p.supplier_id]){
+        const amt = Number(p.amount);
+        map[p.supplier_id].total -= amt;
+        map[p.supplier_id].payments_sum += amt;
+      }
+    });
     return map;
   },[suppliers,deliveries,payments,packages]);
 
@@ -976,11 +989,18 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         </div>
         <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
-            <thead><tr><TH ch="Поставщик"/><TH ch="Контакт"/><TH ch="Пакетов"/><TH ch="Статус"/><TH ch=""/></tr></thead>
+            <thead><tr><TH ch="Поставщик"/><TH ch="Контакт"/><TH ch="Нач. долг"/><TH ch="Пакетов"/><TH ch="Статус"/><TH ch=""/></tr></thead>
             <tbody>{suppliers.map((s:any,i:number)=>(
               <tr key={s.id} style={{background:i%2===0?C.w:"#fafbfc",opacity:s.active?1:0.55}}>
                 <TD ch={<div><div style={{fontWeight:600,fontSize:12}}>{s.name}</div>{s.notes&&<div style={{fontSize:10,color:C.mu}}>{s.notes}</div>}</div>}/>
                 <TD ch={<div style={{fontSize:11}}>{s.contact}<br/><span style={{color:C.mu}}>{s.phone}</span></div>}/>
+                <TD ch={Number(s.initial_balance)>0
+                  ? <div>
+                      <span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:700}}>{fmt(s.initial_balance)} ₸</span>
+                      {s.initial_balance_date&&<div style={{fontSize:10,color:C.mu,marginTop:2}}>на {fmtDate(s.initial_balance_date)}</div>}
+                    </div>
+                  : <span style={{color:C.mu,fontSize:11}}>—</span>
+                }/>
                 <TD ch={<span style={{fontSize:12}}>{packages.filter(p=>p.supplier_id===s.id).length}</span>}/>
                 <TD ch={<Bdg c={s.active?C.gn:C.mu} bg={s.active?C.gnBg:C.lt} bd={s.active?C.gnBd:C.bdr} ch={s.active?"Активен":"Неактивен"}/>}/>
                 <TD ch={<div style={{display:"flex",gap:4}}>
@@ -1103,6 +1123,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
       notes: supF.notes||"",
       active: supF.active!==false,
       report_hidden: !!supF.report_hidden,
+      initial_balance: Number(supF.initial_balance)||0,
+      initial_balance_date: supF.initial_balance_date||null,
     };
     if(supModal==="add"){const{data}=await sb.from("sup_suppliers").insert(supPayload).select().single();if(data)setSuppliers([...suppliers,data]);}
     else{const{data,error}=await sb.from("sup_suppliers").update(supPayload).eq("id",supF.id).select().single();if(data)setSuppliers(suppliers.map((s:any)=>s.id===data.id?data:s));if(error)console.error("saveSup:",error);}
@@ -1356,12 +1378,15 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         );
         const totalPaid = supPayments.reduce((s:number,p:any)=>s+Number(p.amount||0),0);
 
-        // Баланс: оплачено - принято = аванс (+) или долг (-)
-        const balance = totalPaid - totalReceived;
+        // Баланс: оплачено - (начальный долг + принято) = аванс (+) или долг (-)
+        const initialDebt = Number(sup.initial_balance)||0;
+        const balance = totalPaid - totalReceived - initialDebt;
 
         // Хронологическая лента событий
-        type Event = {date:string, type:"delivery"|"payment", label:string, amount:number, extra?:string};
+        type Event = {date:string, type:"delivery"|"payment"|"initial", label:string, amount:number, extra?:string};
         const events: Event[] = [
+          // Начальный долг показываем первой строкой если есть
+          ...(initialDebt>0 ? [{date: sup.initial_balance_date||repFrom, type:"initial" as const, label:"Входящий остаток (нач. долг)", amount:initialDebt, extra: sup.initial_balance_date?`Зафиксировано: ${fmtDate(sup.initial_balance_date)}`:"Дата не указана"}] : []),
           ...supDeliveries.map((d:any)=>({
             date: d.delivery_date,
             type: "delivery" as const,
@@ -1377,7 +1402,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           })),
         ].sort((a,b)=>a.date.localeCompare(b.date));
 
-        if(!events.length && totalReceived===0 && totalPaid===0) return null;
+        if(!events.length && totalReceived===0 && totalPaid===0 && initialDebt===0) return null;
 
         return(<div key={sup.id} style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,marginBottom:16,overflow:"hidden"}}>
           {/* Шапка поставщика */}
@@ -1385,9 +1410,14 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
             <div style={{flex:1}}>
               <div style={{fontWeight:800,fontSize:14}}>{sup.name}</div>
               {sup.inn&&<div style={{fontSize:11,color:C.mu}}>ИИН/БИН: {sup.inn}</div>}
+              {Number(sup.initial_balance)>0&&<div style={{fontSize:11,color:C.am,marginTop:2}}>💰 Входящий остаток: <strong>{fmt(sup.initial_balance)} ₸</strong>{sup.initial_balance_date&&<span style={{fontWeight:400,color:C.mu}}> на {fmtDate(sup.initial_balance_date)}</span>}</div>}
             </div>
             {/* Сводка */}
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              {Number(sup.initial_balance)>0&&<div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:8,padding:"6px 12px",textAlign:"center"}}>
+                <div style={{fontSize:14,fontWeight:800,color:C.am}}>{fmt(sup.initial_balance)} ₸</div>
+                <div style={{fontSize:9,color:C.am,fontWeight:700}}>НАЧ. ДОЛГ</div>
+              </div>}
               <div style={{background:C.blBg,border:`1px solid ${C.blBd}`,borderRadius:8,padding:"6px 12px",textAlign:"center"}}>
                 <div style={{fontSize:14,fontWeight:800,color:C.bl}}>{fmt(totalReceived)} ₸</div>
                 <div style={{fontSize:9,color:C.mu,fontWeight:700}}>ПРИНЯТО ТОВАРА</div>
@@ -1416,10 +1446,12 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
             </tr></thead>
             <tbody>
               {events.map((ev,i)=>(
-                <tr key={i} style={{background:i%2===0?C.w:"#fafbfc",borderBottom:`1px solid #f1f5f9`}}>
-                  <td style={{padding:"8px 14px",fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{fmtDate(ev.date)}</td>
+                <tr key={i} style={{background:ev.type==="initial"?C.amBg:i%2===0?C.w:"#fafbfc",borderBottom:`1px solid #f1f5f9`}}>
+                  <td style={{padding:"8px 14px",fontSize:11,color:C.md,whiteSpace:"nowrap"}}>{ev.type==="initial"?"Вх. остаток":fmtDate(ev.date)}</td>
                   <td style={{padding:"8px 14px"}}>
-                    {ev.type==="delivery"
+                    {ev.type==="initial"
+                      ?<span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700}}>💰 Нач. долг</span>
+                      :ev.type==="delivery"
                       ?<span style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700}}>📦 Приёмка</span>
                       :<span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700}}>💰 Оплата</span>
                     }
@@ -1428,8 +1460,8 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
                     <div style={{fontWeight:600}}>{ev.label}</div>
                     {ev.extra&&<div style={{fontSize:10,color:C.mu}}>{ev.extra}</div>}
                   </td>
-                  <td style={{padding:"8px 14px",textAlign:"right",fontSize:12,fontWeight:ev.type==="delivery"?700:400,color:ev.type==="delivery"?C.bl:C.mu}}>
-                    {ev.type==="delivery"?`${fmt(ev.amount)} ₸`:"—"}
+                  <td style={{padding:"8px 14px",textAlign:"right",fontSize:12,fontWeight:(ev.type==="delivery"||ev.type==="initial")?700:400,color:ev.type==="initial"?C.am:ev.type==="delivery"?C.bl:C.mu}}>
+                    {(ev.type==="delivery"||ev.type==="initial")?`${fmt(ev.amount)} ₸`:"—"}
                   </td>
                   <td style={{padding:"8px 14px",textAlign:"right",fontSize:12,fontWeight:ev.type==="payment"?700:400,color:ev.type==="payment"?C.gn:C.mu}}>
                     {ev.type==="payment"?`${fmt(ev.amount)} ₸`:"—"}
@@ -1438,8 +1470,13 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
               ))}
             </tbody>
             <tfoot>
+              {initialDebt>0&&<tr style={{background:C.lt,borderTop:`1px solid ${C.bdr}`}}>
+                <td colSpan={3} style={{padding:"6px 14px",fontSize:10,fontWeight:600,color:C.mu}}>Нач. долг + поставки за период</td>
+                <td style={{padding:"6px 14px",textAlign:"right",fontSize:12,fontWeight:700,color:C.am}}>{fmt(initialDebt+totalReceived)} ₸</td>
+                <td style={{padding:"6px 14px",textAlign:"right",fontSize:12,fontWeight:700,color:C.gn}}>{fmt(totalPaid)} ₸</td>
+              </tr>}
               <tr style={{background:C.lt,borderTop:`2px solid ${C.bdr}`}}>
-                <td colSpan={3} style={{padding:"8px 14px",fontSize:11,fontWeight:700,color:C.md}}>ИТОГО за период</td>
+                <td colSpan={3} style={{padding:"8px 14px",fontSize:11,fontWeight:700,color:C.md}}>ИТОГО поставки за период</td>
                 <td style={{padding:"8px 14px",textAlign:"right",fontSize:13,fontWeight:800,color:C.bl}}>{fmt(totalReceived)} ₸</td>
                 <td style={{padding:"8px 14px",textAlign:"right",fontSize:13,fontWeight:800,color:C.gn}}>{fmt(totalPaid)} ₸</td>
               </tr>
@@ -1517,6 +1554,37 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
           {([["НАИМЕНОВАНИЕ","name"],["КОНТАКТ","contact"],["ТЕЛЕФОН","phone"],["ИИН/БИН","inn"],["ЗАМЕТКИ","notes"]] as [string,string][]).map(([l,k])=>(
             <div key={k}><div style={{fontSize:9,color:C.mu,marginBottom:3,fontWeight:700}}>{l}</div><input value={supF[k]||""} onChange={e=>setSupF({...supF,[k]:e.target.value})} style={I()}/></div>
           ))}
+
+          {/* Начальный долг — только owner/manager/accountant */}
+          {canEditInitialBalance && <div style={{background:C.amBg,border:`1px solid ${C.amBd}`,borderRadius:9,padding:"10px 12px"}}>
+            <div style={{fontSize:9,color:C.am,marginBottom:5,fontWeight:700}}>💰 НАЧАЛЬНЫЙ ДОЛГ (ВХОДЯЩИЙ ОСТАТОК)</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <div>
+                <div style={{fontSize:9,color:C.am,marginBottom:3,fontWeight:600}}>СУММА ₸</div>
+                <input
+                  type="number"
+                  min={0}
+                  value={supF.initial_balance||""}
+                  onChange={e=>setSupF({...supF,initial_balance:e.target.value})}
+                  placeholder="0"
+                  style={I()}
+                />
+              </div>
+              <div>
+                <div style={{fontSize:9,color:C.am,marginBottom:3,fontWeight:600}}>ДАТА ФИКСАЦИИ ДОЛГА</div>
+                <input
+                  type="date"
+                  value={supF.initial_balance_date||""}
+                  onChange={e=>setSupF({...supF,initial_balance_date:e.target.value})}
+                  style={I()}
+                />
+              </div>
+            </div>
+            <div style={{fontSize:10,color:C.am,marginTop:8}}>
+              Сумма долга перед поставщиком на указанную дату. Учитывается в расчёте текущего баланса для сверки с 1С.
+            </div>
+          </div>}
+
           <div><label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox" checked={supF.active||false} onChange={e=>setSupF({...supF,active:e.target.checked})}/>Активен</label></div>
           <div style={{borderTop:`1px solid ${C.bdr}`,paddingTop:9}}>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
