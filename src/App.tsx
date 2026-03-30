@@ -568,14 +568,11 @@ export default function App() {
       setEmps(empsData);
       setShifts(shData);
       if (sts.length > 0) {
-        // Первый доступный магазин определяется после загрузки appUser
-        const storeIdsForUser: number[] = Array.isArray(appUser?.store_ids) ? appUser.store_ids : [];
-        const isOM = appUser?.role === "owner" || appUser?.role === "manager";
-        const accessible = (isOM || storeIdsForUser.length === 0) ? sts : sts.filter((s: any) => storeIdsForUser.includes(s.id));
-        const first = accessible[0]?.id || sts[0].id;
-        setStore((s: any) => s || first);
-        setSchedStore((s: any) => s || first);
-        setRepS((s: any) => s || first);
+        // Магазин по умолчанию устанавливается отдельным useEffect после загрузки appUser
+        // Здесь только если store ещё не выбран — ставим первый из всех (временно)
+        setStore((s: any) => s || sts[0]?.id);
+        setSchedStore((s: any) => s || sts[0]?.id);
+        setRepS((s: any) => s || sts[0]?.id);
       }
 
       // Выручка → {storeId: {date: amount}}
@@ -808,6 +805,23 @@ export default function App() {
   // ── DATA LOAD (only after auth) ────────────────────────────────────────────
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { document.title = "100 Food OF · HR"; }, []);
+
+  // ── МАГАЗИН ПО УМОЛЧАНИЮ — пересчитываем когда appUser и stores готовы ────
+  useEffect(() => {
+    if (!appUser || stores.length === 0) return;
+    const isOM = appUser.role === "owner" || appUser.role === "manager";
+    const ids: number[] = Array.isArray(appUser.store_ids) ? appUser.store_ids : [];
+    // Доступные магазины для этого пользователя
+    const accessible = (isOM || ids.length === 0)
+      ? stores
+      : stores.filter((s: any) => ids.includes(s.id));
+    const first = accessible[0]?.id;
+    if (!first) return;
+    // Всегда переустанавливаем на первый доступный магазин пользователя
+    setStore(first);
+    setSchedStore(first);
+    setRepS(first);
+  }, [appUser, stores]);
 
   // ── ХЕЛПЕРЫ ───────────────────────────────────────────────────────────────
   const activeE = emps.filter(e => e.active);
@@ -1639,12 +1653,12 @@ export default function App() {
         {k:"suppliers", l:"🏭 Поставщики", show: showSuppliers},
       ].filter(i=>i.show),
     },
-    ...(isOwnerOrManager ? [{
+    ...(role==="owner" ? [{
       key: "settings", label: "⚙️ Настройки", color: C.md,
       items: [
         {k:"users",   l:"👥 Пользователи", show: true},
-        {k:"cleanup", l:"🗑 Очистка данных",show: role==="owner"},
-      ].filter(i=>i.show),
+        {k:"cleanup", l:"🗑 Очистка данных",show: true},
+      ],
     }] : []),
   ].filter(g=>g.items.length>0);
 
@@ -2041,13 +2055,6 @@ export default function App() {
         {appUsers.map((u)=>{
           const isMe = u.id===appUser?.id;
           const isOwnerUser = u.role==="owner";
-          const isManagerUser = u.role==="manager";
-          // manager не может редактировать owner и других manager-ов
-          const canEditThisUser = !isMe && (
-            role==="owner"
-              ? !isMe  // owner может редактировать всех кроме себя
-              : !isOwnerUser && !isManagerUser // manager не может трогать owner/manager
-          );
           const storeIds:number[] = Array.isArray(u.store_ids)?u.store_ids:[];
           const storeLabel = (isOwnerUser || u.role==="manager")?"Все магазины":storeIds.length>0?storeIds.map((id:number)=>sn(id)).filter(Boolean).join(", "):"Не назначены";
           const perms = u.permissions||{};
@@ -2058,9 +2065,9 @@ export default function App() {
             {k:"refs",l:"📚 Справочники"},{k:"debts",l:"💳 Долги"},
             {k:"sup_orders",l:"📦 Заказы"},{k:"sup_receiving",l:"🚚 Приёмка"},{k:"sup_payments",l:"💰 Оплаты"},{k:"sup_refs",l:"⚙️ Справочник"},
           ];
-          return(<div key={u.id} onClick={()=>canEditThisUser&&setEditUserModal(u)}
-            style={{background:isMe?C.orBg:C.w,border:`1px solid ${isMe?C.orBd:C.bdr}`,borderRadius:12,padding:"12px 16px",cursor:canEditThisUser?"pointer":"default",transition:"box-shadow .15s"}}
-            onMouseEnter={e=>{if(canEditThisUser)(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(0,0,0,.08)";}}
+          return(<div key={u.id} onClick={()=>!isOwnerUser&&!isMe&&setEditUserModal(u)}
+            style={{background:isMe?C.orBg:C.w,border:`1px solid ${isMe?C.orBd:C.bdr}`,borderRadius:12,padding:"12px 16px",cursor:isOwnerUser||isMe?"default":"pointer",transition:"box-shadow .15s"}}
+            onMouseEnter={e=>{if(!isOwnerUser&&!isMe)(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(0,0,0,.08)";}}
             onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.boxShadow="none";}}>
             <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
               <div style={{width:36,height:36,borderRadius:"50%",background:isOwnerUser?C.orBg:C.blBg,border:`2px solid ${isOwnerUser?C.orBd:C.blBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:isOwnerUser?C.or:C.bl,flexShrink:0}}>
@@ -2075,11 +2082,11 @@ export default function App() {
                 <div style={{fontSize:11,color:C.mu,marginTop:2}}>{u.email} · {storeLabel}</div>
               </div>
               {/* Мини-сводка прав */}
-              {!isOwnerUser&&!isManagerUser&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {!isOwnerUser&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                 {MODS.map(m=>{const lv=perms[m.k]||0;return lv>0?(<span key={m.k} style={{background:lv===3?C.gnBg:lv===2?C.blBg:C.lt,border:`1px solid ${lv===3?C.gnBd:lv===2?C.blBd:C.bdr}`,color:lv===3?C.gn:lv===2?C.bl:C.mu,padding:"2px 7px",borderRadius:20,fontSize:9,fontWeight:700}}>{m.l}</span>):null;})}
                 {Object.values(perms).every(v=>!v)&&<span style={{fontSize:10,color:C.mu,fontStyle:"italic"}}>нет доступов</span>}
               </div>}
-              {canEditThisUser&&<span style={{fontSize:11,color:C.mu}}>✎</span>}
+              {!isOwnerUser&&!isMe&&<span style={{fontSize:11,color:C.mu}}>✎</span>}
             </div>
           </div>);
         })}
@@ -2166,7 +2173,7 @@ export default function App() {
                 ["admin",     "📋 Администратор",C.pu,C.puBg,C.puBd],
                 ["buyer",     "📦 Закупщик",    C.gn,C.gnBg,C.gnBd],
                 ["accountant","💰 Бухгалтер",   C.am,C.amBg,C.amBd],
-              ] as any[]).filter(([rv])=>role==="owner"||rv!=="owner").map(([rv,rl,rc,rbg,rbd])=>(
+              ] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
                 <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"7px 2px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   background:u.role===rv?rbg:C.lt, border:`2px solid ${u.role===rv?rbd:C.bdr}`, color:u.role===rv?rc:C.mu}}>
                   {rl}
@@ -2241,13 +2248,13 @@ export default function App() {
             </div>
           </div>}
 
-          {/* Удаление — только owner может удалять */}
-          {role==="owner"&&<div style={{borderTop:`1px solid ${C.bdr}`,paddingTop:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          {/* Удаление */}
+          <div style={{borderTop:`1px solid ${C.bdr}`,paddingTop:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{fontSize:11,color:C.mu}}>Удаление отзовёт доступ к платформе. Данные сохранятся.</div>
             <button onClick={()=>setDeleteUserM(u)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"7px 14px",borderRadius:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
               🗑 Удалить пользователя
             </button>
-          </div>}
+          </div>
         </div>
       </div>
     </div>);
