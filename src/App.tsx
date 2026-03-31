@@ -2144,7 +2144,7 @@ export default function App() {
       manager:    {},
       admin:      {shifts:2,revenue:2,reports_store:1,reports_emp:1,refs:0,debts:0,sup_orders:0,sup_receiving:2,sup_payments:0},
       buyer:      {shifts:0,revenue:0,reports_store:0,reports_emp:0,refs:0,debts:0,sup_orders:2,sup_receiving:1,sup_payments:1,sup_refs:2},
-      accountant: {shifts:0,revenue:0,reports_store:0,reports_emp:0,refs:0,debts:0,sup_orders:1,sup_receiving:1,sup_payments:2},
+      accountant: {shifts:0,revenue:0,reports_store:0,reports_emp:0,refs:0,debts:0,sup_orders:1,sup_receiving:1,sup_payments:2,sup_refs:1},
     };
     async function setRole(newRole: string) {
       const updates: any = { role: newRole, permissions: ROLE_DEFAULT_PERMS[newRole] || {} };
