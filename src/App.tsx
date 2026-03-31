@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import DebtModule from "./DebtModule";
 import SuppliersModule from "./SuppliersModule";
@@ -39,9 +39,15 @@ function canEdit(user: any, mod: string)  { return getPerm(user, mod) >= 2; }
 function canAccessStore(user: any, storeId: number): boolean {
   if (!user) return false;
   if (user.role === "owner" || user.role === "manager") return true;
-  const ids: number[] = Array.isArray(user.store_ids) ? user.store_ids : [];
-  if (ids.length === 0) return true; // пустой массив = все магазины
-  return ids.includes(storeId);
+  const rawIds = user.store_ids;
+  const ids: number[] = (() => {
+    if (Array.isArray(rawIds)) return rawIds.map((x: any) => Number(x));
+    if (typeof rawIds === "string" && rawIds.length > 0)
+      return rawIds.replace(/^\{|\}$/g,"").split(",").filter(Boolean).map(Number);
+    return [];
+  })();
+  if (ids.length === 0) return true;
+  return ids.includes(Number(storeId));
 }
 
 // ═══ EXCEL EXPORT (SheetJS via CDN — грузится динамически) ═══
@@ -541,7 +547,7 @@ export default function App() {
 
 
   // ── ЗАГРУЗКА ДАННЫХ ───────────────────────────────────────────────────────
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (user?: any) => {
     setLoading(true);
     setError(null);
     try {
@@ -567,7 +573,26 @@ export default function App() {
       setPositions(poss);
       setEmps(empsData);
       setShifts(shData);
-      // Магазин по умолчанию устанавливается в отдельном useEffect после загрузки appUser
+      // Устанавливаем правильный магазин на основе прав пользователя
+      if (sts.length > 0) {
+        const u = user || appUser;
+        const isOM = u?.role === "owner" || u?.role === "manager";
+        // store_ids может прийти как строка "{19}" из PostgreSQL — приводим к числам
+        const rawIds = u?.store_ids;
+        const ids: number[] = (() => {
+          if (Array.isArray(rawIds)) return rawIds.map((x: any) => Number(x));
+          if (typeof rawIds === "string" && rawIds.length > 0)
+            return rawIds.replace(/^\{|\}$/g,"").split(",").filter(Boolean).map(Number);
+          return [];
+        })();
+        const accessible = (isOM || ids.length === 0)
+          ? sts
+          : sts.filter((s: any) => ids.includes(Number(s.id)));
+        const first = accessible[0]?.id || sts[0]?.id;
+        setStore(first);
+        setSchedStore(first);
+        setRepS(first);
+      }
 
       // Выручка → {storeId: {date: amount}}
       const revMap = {};
@@ -629,6 +654,7 @@ export default function App() {
     }
     setAppUser(data);
     setAuthLoading(false);
+    loadAll(data);
   }
 
   async function refreshRole() {
@@ -797,26 +823,7 @@ export default function App() {
   }
 
   // ── DATA LOAD (only after auth) ────────────────────────────────────────────
-  useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { document.title = "100 Food OF · HR"; }, []);
-
-  // ── МАГАЗИН ПО УМОЛЧАНИЮ — устанавливаем один раз когда appUser и stores готовы ────
-  const storeInitialized = useRef(false);
-  useEffect(() => {
-    if (storeInitialized.current) return; // уже инициализировали
-    if (!appUser || stores.length === 0) return;
-    const isOM = appUser.role === "owner" || appUser.role === "manager";
-    const ids: number[] = Array.isArray(appUser.store_ids) ? appUser.store_ids : [];
-    const accessible = (isOM || ids.length === 0)
-      ? stores
-      : stores.filter((s: any) => ids.includes(s.id));
-    const first = accessible[0]?.id;
-    if (!first) return;
-    storeInitialized.current = true;
-    setStore(first);
-    setSchedStore(first);
-    setRepS(first);
-  }, [appUser, stores]);
 
   // ── ХЕЛПЕРЫ ───────────────────────────────────────────────────────────────
   const activeE = emps.filter(e => e.active);
@@ -1102,9 +1109,19 @@ export default function App() {
     </div>
   );
 
+  // Ждём пока магазин определится для пользователя
+  if (!store && stores.length > 0) return <Spinner text="Определение магазина..."/>;
+
   const role: string = appUser?.role || "admin";
   const isOwnerOrManager = role === "owner" || role === "manager";
-  const myStoreIds: number[] = Array.isArray(appUser?.store_ids) ? appUser.store_ids : [];
+  const rawStoreIds = appUser?.store_ids;
+  const myStoreIds: number[] = (() => {
+    if (Array.isArray(rawStoreIds)) return rawStoreIds.map((x: any) => Number(x));
+    if (typeof rawStoreIds === "string" && rawStoreIds.length > 0) {
+      return rawStoreIds.replace(/^\{|\}$/g,"").split(",").filter(Boolean).map(Number);
+    }
+    return [];
+  })();
 
   // ── РЕНДЕР ВКЛАДОК ────────────────────────────────────────────────────────
   function renderInput() {
