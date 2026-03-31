@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import DebtModule from "./DebtModule";
 import SuppliersModule from "./SuppliersModule";
@@ -567,13 +567,7 @@ export default function App() {
       setPositions(poss);
       setEmps(empsData);
       setShifts(shData);
-      if (sts.length > 0) {
-        // Магазин по умолчанию устанавливается отдельным useEffect после загрузки appUser
-        // Здесь только если store ещё не выбран — ставим первый из всех (временно)
-        setStore((s: any) => s || sts[0]?.id);
-        setSchedStore((s: any) => s || sts[0]?.id);
-        setRepS((s: any) => s || sts[0]?.id);
-      }
+      // Магазин по умолчанию устанавливается в отдельном useEffect после загрузки appUser
 
       // Выручка → {storeId: {date: amount}}
       const revMap = {};
@@ -806,18 +800,19 @@ export default function App() {
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => { document.title = "100 Food OF · HR"; }, []);
 
-  // ── МАГАЗИН ПО УМОЛЧАНИЮ — пересчитываем когда appUser и stores готовы ────
+  // ── МАГАЗИН ПО УМОЛЧАНИЮ — устанавливаем один раз когда appUser и stores готовы ────
+  const storeInitialized = useRef(false);
   useEffect(() => {
+    if (storeInitialized.current) return; // уже инициализировали
     if (!appUser || stores.length === 0) return;
     const isOM = appUser.role === "owner" || appUser.role === "manager";
     const ids: number[] = Array.isArray(appUser.store_ids) ? appUser.store_ids : [];
-    // Доступные магазины для этого пользователя
     const accessible = (isOM || ids.length === 0)
       ? stores
       : stores.filter((s: any) => ids.includes(s.id));
     const first = accessible[0]?.id;
     if (!first) return;
-    // Всегда переустанавливаем на первый доступный магазин пользователя
+    storeInitialized.current = true;
     setStore(first);
     setSchedStore(first);
     setRepS(first);
