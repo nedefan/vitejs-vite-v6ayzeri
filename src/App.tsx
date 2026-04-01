@@ -1665,12 +1665,12 @@ export default function App() {
         {k:"suppliers", l:"🏭 Поставщики", show: showSuppliers},
       ].filter(i=>i.show),
     },
-    ...(role==="owner" ? [{
+    ...((role==="owner"||role==="manager") ? [{
       key: "settings", label: "⚙️ Настройки", color: C.md,
       items: [
         {k:"users",   l:"👥 Пользователи", show: true},
-        {k:"cleanup", l:"🗑 Очистка данных",show: true},
-      ],
+        {k:"cleanup", l:"🗑 Очистка данных",show: role==="owner"},
+      ].filter(i=>i.show),
     }] : []),
   ].filter(g=>g.items.length>0);
 
@@ -2185,7 +2185,7 @@ export default function App() {
                 ["admin",     "📋 Администратор",C.pu,C.puBg,C.puBd],
                 ["buyer",     "📦 Закупщик",    C.gn,C.gnBg,C.gnBd],
                 ["accountant","💰 Бухгалтер",   C.am,C.amBg,C.amBd],
-              ] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
+              ] as any[]).filter(([rv])=>role==="owner"||(rv!=="owner"&&rv!=="manager")).map(([rv,rl,rc,rbg,rbd])=>(
                 <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"7px 2px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   background:u.role===rv?rbg:C.lt, border:`2px solid ${u.role===rv?rbd:C.bdr}`, color:u.role===rv?rc:C.mu}}>
                   {rl}
