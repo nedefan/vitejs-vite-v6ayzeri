@@ -35,6 +35,8 @@ export default function DebtModule({ sb, emps, stores, debts, setDebts, debtMove
   const [detailEmp, setDetailEmp] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [nmove, setNmove] = useState({date:new Date().toISOString().slice(0,10),move_type:"charge",amount:"",comment:"",store_id:""});
+  const [historyModal, setHistoryModal] = useState(false);
+  const [historyEmp, setHistoryEmp] = useState<any>(null);
 
   const sn = (id:any) => stores.find((s:any)=>s.id===id)?.name||"";
   const empObj = (id:any) => emps.find((e:any)=>e.id===id);
@@ -111,23 +113,28 @@ export default function DebtModule({ sb, emps, stores, debts, setDebts, debtMove
   const subTabBtn=(active:boolean)=>({background:active?C.w:"none",border:`1px solid ${active?C.bdr:"transparent"}`,borderRadius:7,cursor:"pointer",padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"inherit",color:active?C.or:C.mu,boxShadow:active?"0 1px 3px rgba(0,0,0,.07)":"none"});
 
   function renderList() {
+    const activeDebtors = empSummary.filter((e:any)=>e.balance>0);
+    const hasHistory = empSummary.filter((e:any)=>e.empMoves.length>0||e.initialTotal>0);
     return(<div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:14}}>
-        <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.rd,fontWeight:700,marginBottom:4}}>ОБЩИЙ ДОЛГ</div><div style={{fontSize:22,fontWeight:800,color:C.rd}}>{fmt(totalDebt)} ₸</div></div>
-        <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.or,fontWeight:700,marginBottom:4}}>С ДОЛГОМ</div><div style={{fontSize:22,fontWeight:800,color:C.or}}>{empSummary.filter(e=>e.balance>0).length}</div></div>
-        <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.gn,fontWeight:700,marginBottom:4}}>БЕЗ ДОЛГА</div><div style={{fontSize:22,fontWeight:800,color:C.gn}}>{empSummary.filter(e=>e.balance<=0).length}</div></div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,flex:1}}>
+          <div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.rd,fontWeight:700,marginBottom:4}}>ОБЩИЙ ДОЛГ</div><div style={{fontSize:22,fontWeight:800,color:C.rd}}>{fmt(totalDebt)} ₸</div></div>
+          <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.or,fontWeight:700,marginBottom:4}}>С ДОЛГОМ</div><div style={{fontSize:22,fontWeight:800,color:C.or}}>{activeDebtors.length}</div></div>
+          <div style={{background:C.puBg,border:`1px solid ${C.puBd}`,borderRadius:10,padding:"12px 16px"}}><div style={{fontSize:9,color:C.pu,fontWeight:700,marginBottom:4}}>ИСТОРИЯ</div><div style={{fontSize:22,fontWeight:800,color:C.pu}}>{hasHistory.length} чел.</div></div>
+        </div>
+        <button onClick={()=>setHistoryModal(true)} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"10px 18px",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>📋 История долгов</button>
       </div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"auto"}}>
-        {empSummary.length===0
-          ?<div style={{padding:40,textAlign:"center",color:C.mu}}><div style={{fontSize:28,marginBottom:8}}>📋</div><div style={{fontSize:13,fontWeight:600}}>Нет задолженностей</div></div>
+        {activeDebtors.length===0
+          ?<div style={{padding:40,textAlign:"center",color:C.mu}}><div style={{fontSize:28,marginBottom:8}}>✅</div><div style={{fontSize:13,fontWeight:600}}>Нет активных задолженностей</div><div style={{fontSize:11,color:C.mu,marginTop:4}}>История движений доступна в кнопке «История долгов»</div></div>
           :<table style={{width:"100%",borderCollapse:"collapse",minWidth:650}}>
             <thead><tr><TH ch="Сотрудник"/><TH ch="Первонач."/><TH ch="Начислено"/><TH ch="Удержано"/><TH ch="Остаток"/><TH ch=""/></tr></thead>
-            <tbody>{empSummary.map((row:any,i:number)=>(<tr key={row.empId} style={{background:i%2===0?C.w:"#fafbfc",opacity:row.balance>0?1:0.6}}>
+            <tbody>{activeDebtors.map((row:any,i:number)=>(<tr key={row.empId} style={{background:i%2===0?C.w:"#fafbfc"}}>
               <TD ch={<div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontWeight:700,color:C.bl}}>{row.emp?shortName(row.emp):"?"}</span>{row.isFired&&<Bdg c={C.rd} bg={C.rdBg} bd={C.rdBd} ch="уволен"/>}</div>}/>
               <TD ch={<span style={{color:C.md}}>{fmt(row.initialTotal)} ₸</span>}/>
               <TD ch={row.charges>0?<span style={{color:C.rd,fontWeight:600}}>+{fmt(row.charges)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
               <TD ch={row.repays>0?<span style={{color:C.gn,fontWeight:600}}>−{fmt(row.repays)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
-              <TD ch={<span style={{fontWeight:800,fontSize:13,color:row.balance>0?C.rd:C.gn}}>{fmt(row.balance)} ₸</span>}/>
+              <TD ch={<span style={{fontWeight:800,fontSize:13,color:C.rd}}>{fmt(row.balance)} ₸</span>}/>
               <TD ch={<div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
                 <button onClick={()=>openAddMove(row.empId)} style={{background:C.orBg,border:`1px solid ${C.orBd}`,color:C.or,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontWeight:600}}>+ Движение</button>
                 <button onClick={()=>setDetailEmp(row.empId)} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 8px",borderRadius:5,fontSize:10,cursor:"pointer"}}>📜 История</button>
@@ -218,6 +225,76 @@ export default function DebtModule({ sb, emps, stores, debts, setDebts, debtMove
         </div>
       </div>
     </div>);})()}
+
+    {/* ══ МОДАЛ ИСТОРИЯ ДОЛГОВ ══ */}
+    {historyModal&&(
+      <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+        <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:16,padding:24,width:740,maxWidth:"96vw",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div><div style={{fontWeight:800,fontSize:15}}>📋 История долгов</div><div style={{fontSize:11,color:C.mu,marginTop:2}}>Все сотрудники у кого были движения</div></div>
+            <button onClick={()=>{setHistoryModal(false);setHistoryEmp(null);}} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.mu,width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:16}}>×</button>
+          </div>
+          {/* Список сотрудников с историей */}
+          {historyEmp===null?(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {empSummary.filter((e:any)=>e.empMoves.length>0||e.initialTotal>0).length===0
+                ?<div style={{padding:40,textAlign:"center",color:C.mu}}>Нет истории движений</div>
+                :empSummary.filter((e:any)=>e.empMoves.length>0||e.initialTotal>0).map((row:any)=>(
+                <div key={row.empId} style={{background:row.balance>0?C.rdBg:C.gnBg,border:`1px solid ${row.balance>0?C.rdBd:C.gnBd}`,borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:36,height:36,borderRadius:"50%",background:row.balance>0?C.rdBg:C.gnBg,border:`2px solid ${row.balance>0?C.rdBd:C.gnBd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:row.balance>0?C.rd:C.gn,flexShrink:0}}>
+                      {row.emp?(row.emp.last_name||"?")[0].toUpperCase():"?"}
+                    </div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13,color:C.tx}}>{row.emp?fullName(row.emp):"?"}{row.isFired&&<span style={{marginLeft:6,background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,fontSize:9,padding:"1px 6px",borderRadius:20,fontWeight:700}}>уволен</span>}</div>
+                      <div style={{fontSize:10,color:C.mu,marginTop:1}}>{row.empMoves.length} операций · Первонач.: {fmt(row.initialTotal)} ₸</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:16,fontWeight:800,color:row.balance>0?C.rd:C.gn}}>{fmt(row.balance)} ₸</div>
+                      <div style={{fontSize:9,color:C.mu}}>остаток</div>
+                    </div>
+                    <div style={{display:"flex",gap:5}}>
+                      <button onClick={()=>setHistoryEmp(row.empId)} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"5px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:600}}>📜 Открыть</button>
+                      <button onClick={()=>exportStatement(row.empId)} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"5px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:600}}>📥 Excel</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ):(()=>{
+            const summary=empSummary.find((e:any)=>e.empId===historyEmp);if(!summary)return null;
+            const emp=summary.emp;
+            const history:any[]=[];let running=0;
+            summary.empDebts.forEach((d:any)=>{if(Number(d.initial_amount)>0){running+=Number(d.initial_amount);history.push({date:d.created_at||"—",type:"Первоначальный долг",store:sn(d.store_id),amount:Number(d.initial_amount),running,comment:d.reason||""});}});
+            [...summary.empMoves].sort((a:any,b:any)=>a.date.localeCompare(b.date)).forEach((m:any)=>{const ic=m.move_type==="charge";const debt=debts.find((d:any)=>d.id===m.debt_id);running+=ic?Number(m.amount):-Number(m.amount);history.push({date:m.date,type:ic?"Начисление ущерба":"Удержание",store:debt?sn(debt.store_id):"—",amount:ic?Number(m.amount):-Number(m.amount),running,comment:m.comment||""});});
+            return(<div>
+              <button onClick={()=>setHistoryEmp(null)} style={{background:C.lt,border:`1px solid ${C.bdr}`,color:C.md,padding:"5px 12px",borderRadius:7,fontSize:11,cursor:"pointer",fontWeight:600,marginBottom:14}}>← Назад к списку</button>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+                <div><div style={{fontWeight:800,fontSize:14}}>{emp?fullName(emp):"?"}</div><div style={{fontSize:11,color:C.mu}}>Полная история задолженности</div></div>
+                <button onClick={()=>exportStatement(historyEmp)} style={{background:C.puBg,border:`1px solid ${C.puBd}`,color:C.pu,padding:"5px 12px",borderRadius:6,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>📥 Скачать Excel</button>
+              </div>
+              <div style={{display:"flex",gap:10,marginBottom:14}}>
+                <div style={{flex:1,background:C.lt,borderRadius:8,padding:"8px 12px",textAlign:"center"}}><div style={{fontSize:9,color:C.mu,fontWeight:700}}>Первоначальный</div><div style={{fontSize:16,fontWeight:800,color:C.tx}}>{fmt(summary.initialTotal)} ₸</div></div>
+                <div style={{flex:1,background:summary.balance>0?C.rdBg:C.gnBg,borderRadius:8,padding:"8px 12px",textAlign:"center"}}><div style={{fontSize:9,color:summary.balance>0?C.rd:C.gn,fontWeight:700}}>Текущий остаток</div><div style={{fontSize:16,fontWeight:800,color:summary.balance>0?C.rd:C.gn}}>{fmt(summary.balance)} ₸</div></div>
+              </div>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr><TH ch="Дата"/><TH ch="Операция"/><TH ch="Магазин"/><TH ch="Сумма"/><TH ch="Остаток"/><TH ch="Комм."/></tr></thead>
+                <tbody>{history.map((h,idx)=>{const ip=h.amount>0;return(<tr key={idx} style={{background:idx%2===0?C.w:"#fafbfc"}}>
+                  <td style={{padding:"8px 10px",fontSize:10,color:C.md,borderBottom:"1px solid #f1f5f9"}}>{h.date}</td>
+                  <td style={{padding:"8px 10px",borderBottom:"1px solid #f1f5f9"}}>{h.type==="Первоначальный долг"?<span style={{fontSize:10,fontWeight:600,color:C.md}}>{h.type}</span>:ip?<Bdg c={C.rd} bg={C.rdBg} bd={C.rdBd} ch="Начисление"/>:<Bdg c={C.gn} bg={C.gnBg} bd={C.gnBd} ch="Удержание"/>}</td>
+                  <td style={{padding:"8px 10px",fontSize:10,color:C.md,borderBottom:"1px solid #f1f5f9"}}>{h.store}</td>
+                  <td style={{padding:"8px 10px",borderBottom:"1px solid #f1f5f9"}}><span style={{fontWeight:600,color:ip?C.rd:C.gn}}>{ip?"+":"−"}{fmt(Math.abs(h.amount))} ₸</span></td>
+                  <td style={{padding:"8px 10px",borderBottom:"1px solid #f1f5f9"}}><span style={{fontWeight:700,color:h.running>0?C.tx:C.gn}}>{fmt(h.running)} ₸</span></td>
+                  <td style={{padding:"8px 10px",fontSize:10,color:C.mu,borderBottom:"1px solid #f1f5f9"}}>{h.comment||"—"}</td>
+                </tr>);})}</tbody>
+              </table>
+            </div>);
+          })()}
+        </div>
+      </div>
+    )}
 
     {detailEmp&&(()=>{const summary=empSummary.find(e=>e.empId===detailEmp);if(!summary)return null;const emp=summary.emp;
       const history:{date:string,type:string,store:string,amount:number,running:number,comment:string}[]=[];let running=0;

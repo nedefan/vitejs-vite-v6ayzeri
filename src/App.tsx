@@ -105,7 +105,19 @@ function addMerge(ws, r1, c1, r2, c2) {
 
 // ── Экспорт: Отчёт по магазину ──────────────────────────────────────────────
 async function exportStorePDF(params) {
-  const { store, repF, repT, shifts, positions, revenue, stores, emps } = params;
+  const { store, repF, repT, shifts, positions, revenue, stores, emps, revisions, cashChecks } = params;
+  const isCashierS = (posId) => (positions.find(p=>p.id===posId)?.name||"").toLowerCase().includes("кассир");
+  const getCashS = (empId,storeId,dt,posId) => { if(!isCashierS(posId)) return null; const c=(cashChecks||[]).find(cc=>cc.emp_id===empId&&cc.store_id===storeId&&cc.date===dt); return c?Math.round(c.actual-c.expected):null; };
+
+  function getRevDeductionS(shift) {
+    const rev = (revisions||[]).find(rv=>rv.store_id===shift.store_id&&shift.date>=rv.period_from&&shift.date<=rv.period_to);
+    if(!rev) return 0;
+    const totalRevP = Object.entries((revenue[rev.store_id]||{})).filter(([d])=>d>=rev.period_from&&d<=rev.period_to).reduce((s,[,v])=>s+v,0);
+    const allowance = Math.round(totalRevP*rev.allowance_pct/100);
+    const excess = Math.max(0, rev.shortage_actual-allowance);
+    const totalShifts = shifts.filter(s=>s.store_id===rev.store_id&&s.date>=rev.period_from&&s.date<=rev.period_to).length;
+    return totalShifts>0 ? Math.round(excess/totalShifts) : 0;
+  }
   const XLSX = await loadXLSX();
   const wb = XLSX.utils.book_new();
 
@@ -134,6 +146,7 @@ async function exportStorePDF(params) {
 
   const tots = rs.reduce((a,r)=>{const p=parts(r);return{base:a.base+p.base,variable:a.variable+p.variable,bonus:a.bonus+p.bonus,total:a.total+p.total};},{base:0,variable:0,bonus:0,total:0});
   const totalRev = Object.entries(revenue[store]||{}).filter(([d])=>d>=repF&&d<=repT).reduce((s,[,v])=>s+v,0);
+  const totalRevDeductionS = rs.reduce((s,r)=>s+getRevDeductionS(r),0);
   const st = stObj(store);
 
   const ws = {};
@@ -150,13 +163,13 @@ async function exportStorePDF(params) {
     [cell('Смен'), numCell(rs.length), cell('Сотрудников'), numCell(new Set(rs.map(r=>r.emp_id)).size),
      cell('Выручка'), moneyCell(totalRev), cell('ФОТ итого'), moneyCell(tots.total),null,null],
     [cell('Оклады (пост.)'), moneyCell(tots.base,XS.base), cell('% выручки (перем.)'), moneyCell(tots.variable,XS.varbl),
-     cell('Бонусы'), moneyCell(tots.bonus,XS.bonus), null,null,null,null],
+     cell('Бонусы'), moneyCell(tots.bonus,XS.bonus), cell('Ревизия'), moneyCell(-totalRevDeductionS,{...XS.num,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),null,null],
     [],
     // Заголовок таблицы
     [cell('Дата',XS.header), cell('Сотрудник',XS.header), cell('Должность',XS.header),
      cell('Часы',XS.header), cell('Выручка дня',XS.header),
      cell('Оклад',XS.header), cell('% Выр.',XS.header), cell('Бонус',XS.header),
-     cell('Итого',XS.header), cell('Комм.',XS.header)],
+     cell('Итого',XS.header), cell('Ревизия',XS.header), cell('Касса',XS.header), cell('Комм.',XS.header)],
   ];
 
   rs.forEach(r => {
@@ -171,6 +184,8 @@ async function exportStorePDF(params) {
       moneyCell(p.variable, XS.varbl),
       moneyCell(p.bonus, XS.bonus),
       moneyCell(p.total, XS.итого),
+      moneyCell(getRevDeductionS(r)>0?-getRevDeductionS(r):0,{...XS.num,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+      (()=>{const d=getCashS(r.emp_id,r.store_id,r.date,r.pos_id);if(d===null)return{v:'—',t:'s',s:XS.str};return{v:Math.round(d),t:'n',s:{...XS.num,font:{color:{rgb:d>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'};})(),
       cell(r.comment||'', XS.str),
     ]);
   });
@@ -182,16 +197,18 @@ async function exportStorePDF(params) {
     moneyCell(tots.variable, {...XS.total,font:{...XS.varbl.font,bold:true}}),
     moneyCell(tots.bonus, XS.total),
     moneyCell(tots.total, XS.total),
+    moneyCell(-totalRevDeductionS,{...XS.total,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+    (()=>{const t=rs.reduce((s,r)=>{const d=getCashS(r.emp_id,r.store_id,r.date,r.pos_id);return s+(d??0);},0);return{v:t,t:'n',s:{...XS.total,font:{color:{rgb:t>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'};})(),
     null,
   ]);
 
   const maxCols = applySheet(ws, rows);
-  setColWidths(ws, [12,22,14,7,14,14,14,12,14,20]);
-  ws['!ref'] = `A1:J${rows.length}`;
-  addMerge(ws,0,0,0,9);
-  addMerge(ws,1,0,1,9);
-  addMerge(ws,2,0,2,9);
-  addMerge(ws,4,0,4,9);
+  setColWidths(ws, [12,22,14,7,14,14,14,12,14,12,12,20]);
+  ws['!ref'] = `A1:L${rows.length}`;
+  addMerge(ws,0,0,0,11);
+  addMerge(ws,1,0,1,11);
+  addMerge(ws,2,0,2,11);
+  addMerge(ws,4,0,4,11);
   ws['!rows'] = [{hpt:22},{hpt:16},{hpt:16}];
 
   XLSX.utils.book_append_sheet(wb, ws, 'По магазину');
@@ -200,7 +217,19 @@ async function exportStorePDF(params) {
 
 // ── Экспорт: Отчёт по сотруднику ────────────────────────────────────────────
 async function exportEmpReport(params) {
-  const { emp, repMo, shifts, positions, revenue, stores, emps } = params;
+  const { emp, repMo, shifts, positions, revenue, stores, emps, revisions, cashChecks } = params;
+  const isCashierE = (posId) => (positions.find(p=>p.id===posId)?.name||"").toLowerCase().includes("кассир");
+  const getCashE = (empId,storeId,dt,posId) => { if(!isCashierE(posId)) return null; const c=(cashChecks||[]).find(cc=>cc.emp_id===empId&&cc.store_id===storeId&&cc.date===dt); return c?Math.round(c.actual-c.expected):null; };
+
+  function getRevDeduction(shift) {
+    const rev = (revisions||[]).find(rv=>rv.store_id===shift.store_id&&shift.date>=rv.period_from&&shift.date<=rv.period_to);
+    if(!rev) return 0;
+    const totalRevP = Object.entries((revenue[rev.store_id]||{})).filter(([d])=>d>=rev.period_from&&d<=rev.period_to).reduce((s,[,v])=>s+v,0);
+    const allowance = Math.round(totalRevP*rev.allowance_pct/100);
+    const excess = Math.max(0, rev.shortage_actual-allowance);
+    const totalShifts = shifts.filter(s=>s.store_id===rev.store_id&&s.date>=rev.period_from&&s.date<=rev.period_to).length;
+    return totalShifts>0 ? Math.round(excess/totalShifts) : 0;
+  }
   const XLSX = await loadXLSX();
   const wb = XLSX.utils.book_new();
 
@@ -227,6 +256,8 @@ async function exportEmpReport(params) {
 
   const tots = rs.reduce((a,r)=>{const p=parts(r);return{base:a.base+p.base,variable:a.variable+p.variable,bonus:a.bonus+p.bonus,total:a.total+p.total};},{base:0,variable:0,bonus:0,total:0});
   const days = new Set(rs.map(r=>r.date)).size;
+  const totalRevDeduction = rs.reduce((s,r)=>s+getRevDeduction(r),0);
+  const totalCashDiff = rs.reduce((s,r)=>{const d=getCashE(r.emp_id,r.store_id,r.date,r.pos_id);return s+(d??0);},0);
 
   const ws = {};
   const rows = [
@@ -240,7 +271,7 @@ async function exportEmpReport(params) {
     [cell('Дата',XS.header),cell('Магазин',XS.header),cell('Должность',XS.header),
      cell('Часы',XS.header),cell('Выручка дня',XS.header),
      cell('Оклад',XS.header),cell('% Выр.',XS.header),cell('Бонус',XS.header),
-     cell('Итого',XS.header)],
+     cell('Итого',XS.header),cell('Ревизия',XS.header),cell('Касса',XS.header)],
   ];
 
   rs.forEach(r => {
@@ -255,6 +286,8 @@ async function exportEmpReport(params) {
       moneyCell(p.variable,XS.varbl),
       moneyCell(p.bonus,XS.bonus),
       moneyCell(p.total,XS.итого),
+      moneyCell(-getRevDeduction(r),{...XS.num,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+      (()=>{const d=getCashE(r.emp_id,r.store_id,r.date,r.pos_id);if(d===null)return{v:'—',t:'s',s:XS.str};return{v:Math.round(d),t:'n',s:{...XS.num,font:{color:{rgb:d>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'};})(),
     ]);
   });
 
@@ -264,13 +297,15 @@ async function exportEmpReport(params) {
     moneyCell(tots.variable,{...XS.total,font:{...XS.varbl.font,bold:true}}),
     moneyCell(tots.bonus,XS.total),
     moneyCell(tots.total,XS.total),
+    moneyCell(-totalRevDeduction,{...XS.total,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+    {v:totalCashDiff,t:'n',s:{...XS.total,font:{color:{rgb:totalCashDiff>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'},
   ]);
 
   applySheet(ws, rows);
-  setColWidths(ws,[12,18,14,7,14,14,14,12,14]);
-  ws['!ref'] = `A1:I${rows.length}`;
-  addMerge(ws,0,0,0,8);
-  addMerge(ws,1,0,1,8);
+  setColWidths(ws,[12,18,14,7,14,14,14,12,14,12,12]);
+  ws['!ref'] = `A1:K${rows.length}`;
+  addMerge(ws,0,0,0,10);
+  addMerge(ws,1,0,1,10);
 
   XLSX.utils.book_append_sheet(wb, ws, 'По сотруднику');
   XLSX.writeFile(wb, `Выписка_${fullName(emp)}_${repMo}.xlsx`);
@@ -278,7 +313,19 @@ async function exportEmpReport(params) {
 
 // ── Экспорт: Зарплатная ведомость ───────────────────────────────────────────
 async function exportPayroll(params) {
-  const { repMo, shifts, positions, revenue, stores, emps } = params;
+  const { repMo, shifts, positions, revenue, stores, emps, revisions, cashChecks } = params;
+  const isCashierP = (posId) => (positions.find(p=>p.id===posId)?.name||"").toLowerCase().includes("кассир");
+  const getCashP = (empId,mo) => { const empShifts=shifts.filter(s=>s.emp_id===empId&&s.date.startsWith(mo)&&isCashierP(s.pos_id)); const dates=new Set(empShifts.map(s=>s.date)); return (cashChecks||[]).filter(c=>c.emp_id===empId&&dates.has(c.date)).reduce((s,c)=>s+Math.round(c.actual-c.expected),0); };
+
+  function getRevDeductionP(shift) {
+    const rev = (revisions||[]).find(rv=>rv.store_id===shift.store_id&&shift.date>=rv.period_from&&shift.date<=rv.period_to);
+    if(!rev) return 0;
+    const totalRevP = Object.entries((revenue[rev.store_id]||{})).filter(([d])=>d>=rev.period_from&&d<=rev.period_to).reduce((s,[,v])=>s+v,0);
+    const allowance = Math.round(totalRevP*rev.allowance_pct/100);
+    const excess = Math.max(0, rev.shortage_actual-allowance);
+    const totalShifts = shifts.filter(s=>s.store_id===rev.store_id&&s.date>=rev.period_from&&s.date<=rev.period_to).length;
+    return totalShifts>0 ? Math.round(excess/totalShifts) : 0;
+  }
   const XLSX = await loadXLSX();
   const wb = XLSX.utils.book_new();
 
@@ -303,10 +350,12 @@ async function exportPayroll(params) {
   const empData = activeEmps.map(e => {
     const rs = shifts.filter(r=>r.emp_id===e.id&&r.date.startsWith(repMo));
     const tots = rs.reduce((a,r)=>{const p=parts(r);return{base:a.base+p.base,variable:a.variable+p.variable,bonus:a.bonus+p.bonus,total:a.total+p.total,shifts:a.shifts+1};},{base:0,variable:0,bonus:0,total:0,shifts:0});
-    return{emp:e, days:new Set(rs.map(r=>r.date)).size, ...tots};
+    const revDeduction = rs.reduce((s,r)=>s+getRevDeductionP(r),0);
+    const cashDiff = getCashP(e.id, repMo);
+    return{emp:e, days:new Set(rs.map(r=>r.date)).size, ...tots, revDeduction, cashDiff};
   });
 
-  const grand = empData.reduce((a,d)=>({base:a.base+d.base,variable:a.variable+d.variable,bonus:a.bonus+d.bonus,total:a.total+d.total}),{base:0,variable:0,bonus:0,total:0});
+  const grand = empData.reduce((a,d)=>({base:a.base+d.base,variable:a.variable+d.variable,bonus:a.bonus+d.bonus,total:a.total+d.total,revDeduction:a.revDeduction+(d.revDeduction||0),cashDiff:a.cashDiff+(d.cashDiff||0)}),{base:0,variable:0,bonus:0,total:0,revDeduction:0,cashDiff:0});
 
   // Лист 1: Ведомость
   const ws1 = {};
@@ -322,7 +371,7 @@ async function exportPayroll(params) {
     [cell('№',XS.header),cell('ФИО',XS.header),cell('Должность',XS.header),
      cell('Магазин',XS.header),cell('Смен',XS.header),
      cell('Оклад',XS.header),cell('% Выр.',XS.header),cell('Бонус',XS.header),
-     cell('К выплате',XS.header),cell('Подпись',XS.header)],
+     cell('Начислено',XS.header),cell('Ревизия',XS.header),cell('Касса',XS.header),cell('К выплате',XS.header),cell('Подпись',XS.header)],
   ];
 
   empData.forEach((d,i) => {
@@ -336,6 +385,9 @@ async function exportPayroll(params) {
       moneyCell(d.variable,XS.varbl),
       moneyCell(d.bonus,XS.bonus),
       moneyCell(d.total,XS.итого),
+      moneyCell(d.revDeduction>0?-d.revDeduction:0,{...XS.num,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+      {v:d.cashDiff||0,t:'n',s:{...XS.num,font:{color:{rgb:(d.cashDiff||0)>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'},
+      moneyCell(d.total-(d.revDeduction||0),{...XS.итого,font:{color:{rgb:'EA580C'},bold:true,sz:11}}),
       cell('',XS.str),
     ]);
   });
@@ -346,14 +398,17 @@ async function exportPayroll(params) {
     moneyCell(grand.variable,{...XS.total,font:{...XS.varbl.font,bold:true}}),
     moneyCell(grand.bonus,XS.total),
     moneyCell(grand.total,XS.total),
+    moneyCell(-grand.revDeduction,{...XS.total,font:{color:{rgb:'DC2626'},bold:true,sz:10}}),
+    {v:grand.cashDiff||0,t:'n',s:{...XS.total,font:{color:{rgb:(grand.cashDiff||0)>=0?'16A34A':'DC2626'},bold:true,sz:10}},z:'#,##0 "₸"'},
+    moneyCell(grand.total-grand.revDeduction,{...XS.итого,font:{color:{rgb:'EA580C'},bold:true,sz:11}}),
     null,
   ]);
 
   applySheet(ws1, rows1);
-  setColWidths(ws1,[5,24,16,16,6,14,14,12,14,16]);
-  ws1['!ref'] = `A1:J${rows1.length}`;
-  addMerge(ws1,0,0,0,9);
-  addMerge(ws1,1,0,1,9);
+  setColWidths(ws1,[5,24,16,16,6,14,14,12,14,12,12,14,16]);
+  ws1['!ref'] = `A1:M${rows1.length}`;
+  addMerge(ws1,0,0,0,12);
+  addMerge(ws1,1,0,1,12);
   ws1['!rows'] = [{hpt:24}];
 
   XLSX.utils.book_append_sheet(wb, ws1, 'Ведомость');
@@ -536,6 +591,17 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [debtMoves, setDebtMoves] = useState([]);
 
+  // ── КАССА ──
+  const [cashChecks, setCashChecks] = useState<any[]>([]);
+  const [cashInputs, setCashInputs] = useState<Record<string,{expected:string,actual:string,note:string,saving:boolean}>>({});
+
+  // ── РЕВИЗИИ ──
+  const [revisions, setRevisions] = useState<any[]>([]);
+  const [revForm, setRevForm] = useState({allowance_pct:"1.5", shortage_actual:"", note:""});
+  const [revSaving, setRevSaving] = useState(false);
+  const [revApplying, setRevApplying] = useState("");
+  const [revEmpStatus, setRevEmpStatus] = useState<Record<number,string>>({});
+
   // ── САЙДБАР ──
   const [sideCollapsed, setSideCollapsed] = useState(false);
 
@@ -551,7 +617,7 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes] = await Promise.all([
+      const [stRes, posRes, empRes, shRes, revRes, schedRes, debtRes, dmRes, revisionsRes, cashRes] = await Promise.all([
         sb.from("stores").select("*").order("id"),
         sb.from("positions").select("*").order("id"),
         sb.from("employees").select("*").order("id"),
@@ -560,6 +626,8 @@ export default function App() {
         sb.from("schedule").select("*"),
         sb.from("debts").select("*").order("id"),
         sb.from("debt_moves").select("*").order("date", {ascending:false}),
+        sb.from("revisions").select("*").order("created_at", {ascending:false}),
+        sb.from("cash_checks").select("*").order("date", {ascending:false}),
 
       ]);
       const sts = stRes.data || [];
@@ -612,6 +680,8 @@ export default function App() {
       setSchedule(schedMap);
       setDebts(debtRes.data || []);
       setDebtMoves(dmRes.data || []);
+      setRevisions(revisionsRes.data || []);
+      setCashChecks(cashRes.data || []);
 
     } catch(e) {
       setError("Ошибка загрузки: " + e.message);
@@ -633,6 +703,21 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Синхронизируем форму ревизии при смене магазина/периода
+  useEffect(() => {
+    const found = revisions.find(r => r.store_id === repS && r.period_from === repF && r.period_to === repT);
+    if (found) {
+      setRevForm({
+        allowance_pct: String(found.allowance_pct ?? "1.5"),
+        shortage_actual: String(found.shortage_actual ?? ""),
+        note: found.note || "",
+      });
+    } else {
+      setRevForm({allowance_pct:"1.5", shortage_actual:"", note:""});
+    }
+    setRevEmpStatus({});
+  }, [repS, repF, repT, revisions]);
 
   async function loadAppUser(uid) {
     let data = null;
@@ -1124,6 +1209,29 @@ export default function App() {
   })();
 
   // ── РЕНДЕР ВКЛАДОК ────────────────────────────────────────────────────────
+  // Ключ для cashInputs
+  const cashKey = (empId:number, storeId:number, dt:string) => `${empId}_${storeId}_${dt}`;
+  const isCashierPos = (posId:number) => (positions.find(p=>p.id===posId)?.name||"").toLowerCase().includes("кассир");
+
+  // Получить сохранённый cash_check
+  const getCashCheck = (empId:number, storeId:number, dt:string) =>
+    cashChecks.find((c:any)=>c.emp_id===empId&&c.store_id===storeId&&c.date===dt);
+
+  // Сохранить cash_check
+  async function saveCashCheck(empId:number, storeId:number, dt:string) {
+    const key = cashKey(empId, storeId, dt);
+    const inp = cashInputs[key];
+    if(!inp) return;
+    setCashInputs(prev=>({...prev,[key]:{...prev[key],saving:true}}));
+    const payload = {store_id:storeId, emp_id:empId, date:dt, expected:+inp.expected||0, actual:+inp.actual||0, note:inp.note||""};
+    const existing = getCashCheck(empId, storeId, dt);
+    if(existing) { await sb.from("cash_checks").update(payload).eq("id",existing.id); }
+    else { await sb.from("cash_checks").insert(payload); }
+    const {data} = await sb.from("cash_checks").select("*").order("date",{ascending:false});
+    setCashChecks(data||[]);
+    setCashInputs(prev=>({...prev,[key]:{...prev[key],saving:false}}));
+  }
+
   function renderInput() {
     if (!store) return <div style={{padding:40,textAlign:"center",color:C.mu}}>Нет магазинов. Добавьте в Справочниках.</div>;
     const dayRev = getDayRev(store, date);
@@ -1178,7 +1286,7 @@ export default function App() {
         {dayShifts.length===0
           ?<div style={{padding:"44px",textAlign:"center",color:C.mu}}><div style={{fontSize:28,marginBottom:8}}>📋</div><div style={{fontSize:13,fontWeight:600}}>Нет записей</div></div>
           :<table style={{width:"100%",borderCollapse:"collapse",minWidth:750}}>
-            <thead><tr><TH ch="Сотрудник"/><TH ch="Должность"/><TH ch="Доп?"/><TH ch="Часы"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="Комм."/><TH ch=""/></tr></thead>
+            <thead><tr><TH ch="Сотрудник"/><TH ch="Должность"/><TH ch="Доп?"/><TH ch="Часы"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="💵 Касса"/><TH ch="Комм."/><TH ch=""/></tr></thead>
             <tbody>
               {dayShifts.map((rec,i) => {
                 const emp = emps.find(e=>e.id===rec.emp_id);
@@ -1211,6 +1319,22 @@ export default function App() {
                     <TD ch={rec.no_pct&&isRevB?<span style={{background:C.amBg,border:`1px solid ${C.amBd}`,color:C.am,padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700}}>откл.</span>:pt.variable>0?<span style={{fontWeight:600,color:C.pu}}>{fmt(pt.variable)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
                     <TD ch={<span style={{color:pt.bonus?C.gn:C.mu}}>{pt.bonus?`+${pt.bonus.toLocaleString()} ₸`:"—"}</span>}/>
                     <TD ch={<span style={{fontWeight:800,color:C.gn,fontSize:13}}>{fmt(pt.total)} ₸</span>}/>
+                    <TD ch={(()=>{
+                      if(!isCashierPos(rec.pos_id)) return <span style={{color:C.mu,fontSize:10}}>—</span>;
+                      const key=cashKey(rec.emp_id,rec.store_id,rec.date);
+                      const saved=getCashCheck(rec.emp_id,rec.store_id,rec.date);
+                      const inp=cashInputs[key]||(saved?{expected:String(saved.expected),actual:String(saved.actual),note:saved.note||"",saving:false}:{expected:"",actual:"",note:"",saving:false});
+                      const diff=saved?Math.round(saved.actual-saved.expected):null;
+                      if(!cashInputs[key]&&saved&&inp) {}
+                      return(<div style={{minWidth:180}}>
+                        {diff!==null&&<div style={{marginBottom:4,fontWeight:700,fontSize:11,color:diff>=0?C.gn:C.rd}}>{diff>=0?`+${fmt(diff)}`:`−${fmt(Math.abs(diff))}`} ₸</div>}
+                        <div style={{display:"flex",gap:3,alignItems:"center"}}>
+                          <input type="number" placeholder="Ожид." value={cashInputs[key]?.expected??inp.expected} onChange={e=>setCashInputs(prev=>({...prev,[key]:{...inp,...prev[key],expected:e.target.value}}))} style={{width:72,padding:"3px 5px",fontSize:10,border:`1px solid ${C.bdr}`,borderRadius:4,fontFamily:"inherit",outline:"none"}}/>
+                          <input type="number" placeholder="Сдал" value={cashInputs[key]?.actual??inp.actual} onChange={e=>setCashInputs(prev=>({...prev,[key]:{...inp,...prev[key],actual:e.target.value}}))} style={{width:72,padding:"3px 5px",fontSize:10,border:`1px solid ${C.bdr}`,borderRadius:4,fontFamily:"inherit",outline:"none"}}/>
+                          <button onClick={()=>saveCashCheck(rec.emp_id,rec.store_id,rec.date)} disabled={cashInputs[key]?.saving} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 6px",borderRadius:4,fontSize:10,cursor:"pointer",fontWeight:700}}>✓</button>
+                        </div>
+                      </div>);
+                    })()}/>
                     <TD ch={<span style={{color:C.mu,fontSize:10}}>{rec.comment||"—"}</span>}/>
                     <TD ch={<div style={{display:"flex",gap:3}}><button onClick={()=>openEdit(rec)} style={{background:C.blBg,border:`1px solid ${C.blBd}`,color:C.bl,padding:"3px 7px",borderRadius:5,fontSize:11,cursor:"pointer"}}>✎</button><button onClick={()=>deleteShift(rec.id)} style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 7px",borderRadius:5,fontSize:11,cursor:"pointer"}}>✕</button></div>}/>
                   </tr>
@@ -1223,6 +1347,7 @@ export default function App() {
               <td style={{padding:"8px 10px",fontWeight:700,fontSize:12,color:C.pu,borderTop:`2px solid ${C.gnBd}`}}>{fmt(tots.variable)} ₸</td>
               <td style={{padding:"8px 10px",fontWeight:700,fontSize:12,color:C.gn,borderTop:`2px solid ${C.gnBd}`}}>{fmt(tots.bonus)} ₸</td>
               <td style={{padding:"8px 10px",fontWeight:800,fontSize:14,color:C.gn,borderTop:`2px solid ${C.gnBd}`}}>{fmt(tots.total)} ₸</td>
+              <td style={{padding:"8px 10px",fontWeight:700,fontSize:11,color:C.md,borderTop:`2px solid ${C.gnBd}`}}>{(()=>{const total=dayShifts.reduce((s,r)=>{const c=getCashCheck(r.emp_id,r.store_id,r.date);return s+(c?Math.round(c.actual-c.expected):0);},0);return total!==0?<span style={{color:total>=0?C.gn:C.rd,fontWeight:800}}>{total>=0?`+${fmt(total)}`:`−${fmt(Math.abs(total))}`} ₸</span>:<span style={{color:C.mu}}>—</span>;})()}</td>
               <td colSpan={2} style={{borderTop:`2px solid ${C.gnBd}`}}></td>
             </tr>);})()}</tfoot>
           </table>
@@ -1350,10 +1475,39 @@ export default function App() {
     );
   }
 
+  // Касса: разница для одной смены (только кассиры)
+  function getCashDiffForShift(shift:any):number|null {
+    if(!isCashierPos(shift.pos_id)) return null;
+    const c = cashChecks.find((cc:any)=>cc.emp_id===shift.emp_id&&cc.store_id===shift.store_id&&cc.date===shift.date);
+    if(!c) return null;
+    return Math.round(c.actual - c.expected);
+  }
+  // Сумма кассовых разниц за период для одного сотрудника (только кассиры)
+  function getCashDiffForEmp(empId:number, mo:string):number {
+    const empShifts = shifts.filter((s:any)=>s.emp_id===empId&&s.date.startsWith(mo)&&isCashierPos(s.pos_id));
+    const dates = new Set(empShifts.map((s:any)=>s.date));
+    return cashChecks.filter((c:any)=>c.emp_id===empId&&dates.has(c.date)).reduce((s:number,c:any)=>s+Math.round(c.actual-c.expected),0);
+  }
+
+  // Вычет по ревизии для одной смены
+  function getRevDeductionForShift(shift: any): number {
+    const rev = revisions.find((rv:any)=>rv.store_id===shift.store_id&&shift.date>=rv.period_from&&shift.date<=rv.period_to);
+    if(!rev) return 0;
+    const totalRevForPeriod = Object.entries((revenue[rev.store_id]||{}))
+      .filter(([d])=>d>=rev.period_from&&d<=rev.period_to)
+      .reduce((s,[,v])=>s+(v as number),0);
+    const allowance = Math.round(totalRevForPeriod*rev.allowance_pct/100);
+    const excess = Math.max(0, rev.shortage_actual-allowance);
+    const totalShiftsInPeriod = shifts.filter((s:any)=>s.store_id===rev.store_id&&s.date>=rev.period_from&&s.date<=rev.period_to).length;
+    if(totalShiftsInPeriod===0) return 0;
+    return Math.round(excess/totalShiftsInPeriod);
+  }
+
   function renderErep() {
     const rs = repE ? shifts.filter(r=>r.emp_id===repE.id&&r.date.startsWith(repMo)).sort((a,b)=>a.date.localeCompare(b.date)) : [];
     const tots = rs.reduce((acc,r)=>{const pt=calcParts(r,positions,revenue);return{base:acc.base+pt.base,variable:acc.variable+pt.variable,bonus:acc.bonus+pt.bonus,total:acc.total+pt.total};},{base:0,variable:0,bonus:0,total:0});
     const days = new Set(rs.map(r=>r.date)).size;
+    const erepTotalDeduction = rs.reduce((s,r)=>s+getRevDeductionForShift(r),0);
     return(<div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:10,padding:"11px 14px",marginBottom:12,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>СОТРУДНИК</div>
@@ -1364,7 +1518,7 @@ export default function App() {
         </div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МЕСЯЦ</div><input type="month" value={repMo} onChange={e=>setRepMo(e.target.value)} style={I({width:155})}/></div>
         {repE&&<div style={{marginLeft:"auto"}}>
-          <button onClick={()=>exportEmpReport({emp:repE,repMo,shifts,positions,revenue,stores,emps})}
+          <button onClick={()=>exportEmpReport({emp:repE,repMo,shifts,positions,revenue,stores,emps,revisions,cashChecks})}
             style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
             📥 Скачать Excel
           </button>
@@ -1384,12 +1538,13 @@ export default function App() {
               {tots.variable>0&&<div style={{background:C.puBg,border:`1px solid ${C.puBd}`,borderRadius:8,padding:"4px 10px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:C.pu}}>{fmt(tots.variable)} ₸</div><div style={{fontSize:10,color:C.md}}>% выручки</div></div>}
               {tots.bonus>0&&<div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:8,padding:"4px 10px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:C.gn}}>{fmt(tots.bonus)} ₸</div><div style={{fontSize:10,color:C.md}}>бонусы</div></div>}
               <div style={{background:C.orBg,border:`1px solid ${C.orBd}`,borderRadius:8,padding:"4px 10px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:C.or}}>{fmt(tots.total)} ₸</div><div style={{fontSize:10,color:C.md}}>итого</div></div>
+              {erepTotalDeduction>0&&<div style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,borderRadius:8,padding:"4px 10px",textAlign:"center"}}><div style={{fontSize:14,fontWeight:800,color:C.rd}}>−{fmt(erepTotalDeduction)} ₸</div><div style={{fontSize:10,color:C.md}}>ревизия</div></div>}
             </div>
           </div>
           <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"hidden"}}>
             {rs.length===0?<div style={{padding:"32px",textAlign:"center",color:C.mu}}>Нет данных</div>:(
             <table style={{width:"100%",borderCollapse:"collapse"}}>
-              <thead><tr><TH ch="Дата"/><TH ch="Магазин"/><TH ch="Должность"/><TH ch="Часы"/><TH ch="Выручка"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="Комм."/></tr></thead>
+              <thead><tr><TH ch="Дата"/><TH ch="Магазин"/><TH ch="Должность"/><TH ch="Часы"/><TH ch="Выручка"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="🔍 Ревизия"/><TH ch="💵 Касса"/><TH ch="Комм."/></tr></thead>
               <tbody>{rs.map((r,i)=>{const pt=calcParts(r,positions,revenue);return(
                 <tr key={r.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
                   <TD ch={<span style={{fontWeight:600}}>{fmtD(r.date)}</span>}/>
@@ -1401,6 +1556,8 @@ export default function App() {
                   <TD ch={pt.variable>0?`${fmt(pt.variable)} ₸`:"—"} s={{color:C.pu,fontWeight:600}}/>
                   <TD ch={pt.bonus?`+${pt.bonus.toLocaleString()} ₸`:"—"} s={{color:pt.bonus?C.gn:C.mu}}/>
                   <TD ch={`${fmt(pt.total)} ₸`} s={{fontWeight:800,color:C.gn}}/>
+                  <TD ch={(()=>{const d=getRevDeductionForShift(r);return d>0?<span style={{color:C.rd,fontWeight:700}}>−{fmt(d)} ₸</span>:<span style={{color:C.mu}}>—</span>;})()}/>
+                  <TD ch={(()=>{const d=getCashDiffForShift(r);if(d===null)return<span style={{color:C.mu}}>—</span>;return<span style={{color:d>=0?C.gn:C.rd,fontWeight:700}}>{d>=0?`+${fmt(d)}`:`−${fmt(Math.abs(d))}`} ₸</span>;})()}/>
                   <TD ch={r.comment||"—"} s={{color:C.mu,fontSize:10}}/>
                 </tr>);})}
               </tbody>
@@ -1410,6 +1567,8 @@ export default function App() {
                 <td style={{padding:"6px 10px",fontWeight:700,color:C.pu,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{fmt(tots.variable)} ₸</td>
                 <td style={{padding:"6px 10px",fontWeight:700,color:C.gn,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{fmt(tots.bonus)} ₸</td>
                 <td style={{padding:"6px 10px",fontWeight:800,color:C.gn,borderTop:`2px solid ${C.gnBd}`,fontSize:14}}>{fmt(tots.total)} ₸</td>
+                <td style={{padding:"6px 10px",fontWeight:800,color:C.rd,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{erepTotalDeduction>0?`−${fmt(erepTotalDeduction)} ₸`:"—"}</td>
+                <td style={{padding:"6px 10px",fontWeight:800,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{(()=>{const t=rs.reduce((s,r)=>{const d=getCashDiffForShift(r);return s+(d??0);},0);return t!==0?<span style={{color:t>=0?C.gn:C.rd}}>{t>=0?`+${fmt(t)}`:`−${fmt(Math.abs(t))}`} ₸</span>:<span style={{color:C.mu}}>—</span>;})()}</td>
                 <td style={{borderTop:`2px solid ${C.gnBd}`}}></td>
               </tr></tfoot>
             </table>)}
@@ -1424,13 +1583,28 @@ export default function App() {
     const tots = rs.reduce((acc,r)=>{const pt=calcParts(r,positions,revenue);return{base:acc.base+pt.base,variable:acc.variable+pt.variable,bonus:acc.bonus+pt.bonus,total:acc.total+pt.total};},{base:0,variable:0,bonus:0,total:0});
     const ue = new Set(rs.map(r=>r.emp_id)).size;
     const totalRev = Object.entries(revenue[repS]||{}).filter(([d])=>d>=repF&&d<=repT).reduce((s,[,v])=>s+v,0);
+    // Расчёт ревизии (используется и в таблице, и в блоке ниже)
+    const revExisting = revisions.find((rv:any)=>rv.store_id===repS&&rv.period_from===repF&&rv.period_to===repT);
+    const revPct = parseFloat(revForm.allowance_pct)||0;
+    const revActual = parseFloat(revForm.shortage_actual)||0;
+    const revAllowance = Math.round(totalRev*revPct/100);
+    const revExcess = Math.max(0, revActual-revAllowance);
+    const revPerShift = rs.length>0 ? revExcess/rs.length : 0;
+    // Разбивка по сотрудникам для блока ревизии
+    const revEmpMap: Record<number,{emp:any,shifts:number,deduction:number}> = {};
+    rs.forEach((r:any)=>{
+      if(!revEmpMap[r.emp_id]) revEmpMap[r.emp_id]={emp:emps.find((e:any)=>e.id===r.emp_id),shifts:0,deduction:0};
+      revEmpMap[r.emp_id].shifts++;
+    });
+    Object.values(revEmpMap).forEach((v:any)=>{ v.deduction=Math.round(revPerShift*v.shifts); });
+    const revEmpRows = Object.values(revEmpMap) as any[];
     return(<div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:10,padding:"11px 14px",marginBottom:12,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МАГАЗИН</div><select value={repS||""} onChange={e=>setRepS(+e.target.value)} style={I({width:160})}>{visibleStores.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>С</div><input type="date" value={repF} onChange={e=>setRepF(e.target.value)} style={I({width:148})}/></div>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>ПО</div><input type="date" value={repT} onChange={e=>setRepT(e.target.value)} style={I({width:148})}/></div>
         <div style={{marginLeft:"auto"}}>
-          <button onClick={()=>exportStorePDF({store:repS,repF,repT,shifts,positions,revenue,stores,emps})}
+          <button onClick={()=>exportStorePDF({store:repS,repF,repT,shifts,positions,revenue,stores,emps,revisions,cashChecks})}
             style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
             📥 Скачать Excel
           </button>
@@ -1454,7 +1628,7 @@ export default function App() {
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"hidden"}}>
         {rs.length===0?<div style={{padding:"32px",textAlign:"center",color:C.mu}}>Нет данных</div>:(
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH ch="Дата"/><TH ch="Сотрудник"/><TH ch="Должность"/><TH ch="Часы"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="Комм."/></tr></thead>
+          <thead><tr><TH ch="Дата"/><TH ch="Сотрудник"/><TH ch="Должность"/><TH ch="Часы"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="Итого"/><TH ch="🔍 Ревизия"/><TH ch="💵 Касса"/><TH ch="Комм."/></tr></thead>
           <tbody>{rs.map((r,i)=>{const pt=calcParts(r,positions,revenue);return(
             <tr key={r.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
               <TD ch={<span style={{fontWeight:600}}>{fmtD(r.date)}</span>}/>
@@ -1465,6 +1639,8 @@ export default function App() {
               <TD ch={pt.variable>0?`${fmt(pt.variable)} ₸`:"—"} s={{color:C.pu,fontWeight:600}}/>
               <TD ch={pt.bonus?`+${pt.bonus.toLocaleString()} ₸`:"—"} s={{color:pt.bonus?C.gn:C.mu}}/>
               <TD ch={`${fmt(pt.total)} ₸`} s={{fontWeight:800,color:C.gn}}/>
+              <TD ch={revPerShift>0?<span style={{color:C.rd,fontWeight:700}}>−{fmt(Math.round(revPerShift))} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
+              <TD ch={(()=>{const d=getCashDiffForShift(r);if(d===null)return<span style={{color:C.mu}}>—</span>;return<span style={{color:d>=0?C.gn:C.rd,fontWeight:700}}>{d>=0?`+${fmt(d)}`:`−${fmt(Math.abs(d))}`} ₸</span>;})()}/>
               <TD ch={r.comment||"—"} s={{color:C.mu,fontSize:10}}/>
             </tr>);})}
           </tbody>
@@ -1474,20 +1650,146 @@ export default function App() {
             <td style={{padding:"6px 10px",fontWeight:700,color:C.pu,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{fmt(tots.variable)} ₸</td>
             <td style={{padding:"6px 10px",fontWeight:700,color:C.gn,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{fmt(tots.bonus)} ₸</td>
             <td style={{padding:"6px 10px",fontWeight:800,color:C.gn,borderTop:`2px solid ${C.gnBd}`,fontSize:14}}>{fmt(tots.total)} ₸</td>
+            <td style={{padding:"6px 10px",fontWeight:800,color:C.rd,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{revExcess>0?`−${fmt(revExcess)} ₸`:"—"}</td>
+            <td style={{padding:"6px 10px",fontWeight:800,borderTop:`2px solid ${C.gnBd}`,fontSize:12}}>{(()=>{const t=rs.reduce((s,r)=>{const d=getCashDiffForShift(r);return s+(d??0);},0);return t!==0?<span style={{color:t>=0?C.gn:C.rd}}>{t>=0?`+${fmt(t)}`:`−${fmt(Math.abs(t))}`} ₸</span>:<span style={{color:C.mu}}>—</span>;})()}</td>
             <td style={{borderTop:`2px solid ${C.gnBd}`}}></td>
           </tr></tfoot>
         </table>)}
       </div>
+    {/* ══ БЛОК РЕВИЗИИ ══ */}
+    {(()=>{
+      // Используем расчёты из начала renderSrep
+      const existingRev = revExisting;
+      const pct = revPct;
+      const actual = revActual;
+      const allowance = revAllowance;
+      const excess = revExcess;
+      const totalShifts = rs.length;
+      const perShift = revPerShift;
+      const empRows = revEmpRows;
+
+      async function saveRevision() {
+        setRevSaving(true);
+        const payload:any = {store_id:repS, period_from:repF, period_to:repT, allowance_pct:pct, shortage_actual:actual, note:revForm.note};
+        if(existingRev) { await sb.from("revisions").update(payload).eq("id",existingRev.id); }
+        else { await sb.from("revisions").insert(payload); }
+        const {data} = await sb.from("revisions").select("*").order("created_at",{ascending:false});
+        setRevisions(data||[]);
+        setRevSaving(false);
+      }
+
+      async function applyOneToDebt(row:any) {
+        if(!row.emp||!row.deduction||row.deduction<=0) return;
+        setRevApplying("debt_"+row.emp.id);
+        const updDebts = [...debts];
+        let debt = updDebts.find((d:any)=>d.emp_id===row.emp.id&&d.store_id===repS&&d.status==="active");
+        if(!debt) {
+          const {data:nd} = await sb.from("debts").insert({emp_id:row.emp.id,store_id:repS,initial_amount:0,reason:"Недостача по ревизии",status:"active"}).select().single();
+          if(nd) debt=nd;
+        }
+        if(debt) {
+          await sb.from("debt_moves").insert({debt_id:debt.id,date:repT,move_type:"charge",amount:row.deduction,comment:`Ревизия ${repF}–${repT}`});
+        }
+        const {data:dD}=await sb.from("debts").select("*").order("id");
+        const {data:dmD}=await sb.from("debt_moves").select("*").order("date",{ascending:false});
+        if(dD)setDebts(dD); if(dmD)setDebtMoves(dmD);
+        setRevApplying("");
+        setRevEmpStatus(prev=>({...prev,[row.emp.id]:"debt"}));
+      }
+      function markAsPaid(row:any) {
+        if(!row.emp) return;
+        setRevEmpStatus(prev=>({...prev,[row.emp.id]:"paid"}));
+      }
+
+      return(
+        <div style={{marginTop:16,background:C.w,border:`1px solid ${C.amBd}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{background:C.amBg,padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${C.amBd}`}}>
+            <div style={{fontWeight:800,fontSize:13,color:C.am}}>🔍 Ревизия</div>
+            {existingRev&&<span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>✅ Сохранена</span>}
+          </div>
+          <div style={{padding:"14px 16px"}}>
+            {/* Форма */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr auto",gap:10,alignItems:"flex-end",marginBottom:14}}>
+              <div>
+                <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>% ДОПУСТИМЫХ ПОТЕРЬ</div>
+                <input type="number" step="0.1" value={revForm.allowance_pct} onChange={e=>setRevForm({...revForm,allowance_pct:e.target.value})} style={I()}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>ФАКТИЧЕСКАЯ НЕДОСТАЧА (₸)</div>
+                <input type="number" value={revForm.shortage_actual} onChange={e=>setRevForm({...revForm,shortage_actual:e.target.value})} placeholder="0" style={I()}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>КОММЕНТАРИЙ</div>
+                <input type="text" value={revForm.note} onChange={e=>setRevForm({...revForm,note:e.target.value})} placeholder="Плановая ревизия..." style={I()}/>
+              </div>
+              <button onClick={saveRevision} disabled={revSaving} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",opacity:revSaving?0.6:1}}>
+                {revSaving?"⏳...":existingRev?"💾 Обновить":"💾 Сохранить"}
+              </button>
+            </div>
+            {/* Итоги расчёта */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:excess>0||actual>0?14:0}}>
+              {[
+                {l:"Выручка за период",v:`${fmt(totalRev)} ₸`,c:C.gn,bg:C.gnBg,b:C.gnBd},
+                {l:`Допустимые потери (${pct}%)`,v:`${fmt(allowance)} ₸`,c:C.bl,bg:C.blBg,b:C.blBd},
+                {l:"Фактическая недостача",v:`${fmt(actual)} ₸`,c:C.am,bg:C.amBg,b:C.amBd},
+                {l:"Вычет (сверх нормы)",v:`${fmt(excess)} ₸`,c:excess>0?C.rd:C.gn,bg:excess>0?C.rdBg:C.gnBg,b:excess>0?C.rdBd:C.gnBd},
+              ].map((s,i)=>(
+                <div key={i} style={{background:s.bg,border:`1px solid ${s.b}`,borderRadius:9,padding:"9px 12px"}}>
+                  <div style={{fontSize:14,fontWeight:800,color:s.c}}>{s.v}</div>
+                  <div style={{fontSize:10,color:C.md,marginTop:2}}>{s.l}</div>
+                </div>
+              ))}
+            </div>
+            {/* Разбивка по сотрудникам */}
+            {excess>0&&empRows.length>0&&(<>
+              <div style={{borderRadius:9,overflow:"hidden",border:`1px solid ${C.rdBd}`,marginBottom:12}}>
+                <div style={{background:C.rdBg,padding:"7px 12px",fontSize:11,fontWeight:700,color:C.rd}}>
+                  Распределение вычета · {totalShifts} смен · {fmt(Math.round(perShift))} ₸/смена
+                </div>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr><TH ch="Сотрудник"/><TH ch="Смен"/><TH ch="Вычет ₸"/><TH ch="Действие"/></tr></thead>
+                  <tbody>{empRows.map((row:any,i:number)=>{
+                    const empId = row.emp?.id;
+                    const status = empId ? revEmpStatus[empId] : undefined;
+                    const isBusy = revApplying==="debt_"+empId;
+                    return(
+                    <tr key={i} style={{background:i%2===0?C.w:"#fafbfc",opacity:status?0.75:1}}>
+                      <TD ch={<span style={{fontWeight:600}}>{row.emp?fullName(row.emp):"—"}</span>}/>
+                      <TD ch={row.shifts}/>
+                      <TD ch={<span style={{color:C.rd,fontWeight:700}}>−{fmt(row.deduction)} ₸</span>}/>
+                      <TD ch={status==="paid"
+                        ?<span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:700}}>✅ Наличные</span>
+                        :status==="debt"
+                        ?<span style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:700}}>📋 В долг</span>
+                        :<div style={{display:"flex",gap:5}}>
+                          <button onClick={()=>markAsPaid(row)} style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>💵 Наличные</button>
+                          <button onClick={()=>applyOneToDebt(row)} disabled={isBusy} style={{background:isBusy?C.lt:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"4px 10px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:isBusy?0.6:1}}>{isBusy?"⏳...":"📋 В долг"}</button>
+                        </div>
+                      }/>
+                    </tr>);
+                  })}</tbody>
+                </table>
+              </div>
+            </>)}
+            {excess===0&&actual>0&&(
+              <div style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,borderRadius:9,padding:"10px 14px",fontSize:12,color:C.gn,fontWeight:600,textAlign:"center"}}>
+                ✅ Недостача в пределах нормы — вычетов нет
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    })()}
     </div>);
   }
 
   function renderPay() {
-    const allParts = activeE.map(e=>{const rs=shifts.filter(r=>r.emp_id===e.id&&r.date.startsWith(repMo));return rs.reduce((acc,r)=>{const pt=calcParts(r,positions,revenue);return{base:acc.base+pt.base,variable:acc.variable+pt.variable,bonus:acc.bonus+pt.bonus,total:acc.total+pt.total,shifts:acc.shifts+1,days:acc.days};},{base:0,variable:0,bonus:0,total:0,shifts:0,days:new Set(rs.map(r=>r.date)).size});});
-    const grand = allParts.reduce((acc,p)=>({base:acc.base+p.base,variable:acc.variable+p.variable,bonus:acc.bonus+p.bonus,total:acc.total+p.total}),{base:0,variable:0,bonus:0,total:0});
+    const allParts = activeE.map(e=>{const rs=shifts.filter(r=>r.emp_id===e.id&&r.date.startsWith(repMo));const revDeduction=rs.reduce((s,r)=>s+getRevDeductionForShift(r),0);const cashDiff=getCashDiffForEmp(e.id,repMo);return{...rs.reduce((acc,r)=>{const pt=calcParts(r,positions,revenue);return{base:acc.base+pt.base,variable:acc.variable+pt.variable,bonus:acc.bonus+pt.bonus,total:acc.total+pt.total,shifts:acc.shifts+1,days:acc.days};},{base:0,variable:0,bonus:0,total:0,shifts:0,days:new Set(rs.map(r=>r.date)).size}),revDeduction,cashDiff};});
+    const grand = allParts.reduce((acc,p)=>({base:acc.base+p.base,variable:acc.variable+p.variable,bonus:acc.bonus+p.bonus,total:acc.total+p.total,revDeduction:acc.revDeduction+(p.revDeduction||0),cashDiff:acc.cashDiff+(p.cashDiff||0)}),{base:0,variable:0,bonus:0,total:0,revDeduction:0,cashDiff:0});
     return(<div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:12,flexWrap:"wrap",gap:10}}>
         <div><div style={{fontSize:11,color:C.mu,marginBottom:4,fontWeight:600}}>МЕСЯЦ</div><input type="month" value={repMo} onChange={e=>setRepMo(e.target.value)} style={I({width:155})}/></div>
-        <button onClick={()=>exportPayroll({repMo,shifts,positions,revenue,stores,emps})}
+        <button onClick={()=>exportPayroll({repMo,shifts,positions,revenue,stores,emps,revisions,cashChecks})}
           style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 16px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6}}>
           📥 Скачать Excel (ведомость)
         </button>
@@ -1499,7 +1801,7 @@ export default function App() {
       </div>
       <div style={{background:C.w,border:`1px solid ${C.bdr}`,borderRadius:12,overflow:"hidden"}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><TH ch="Сотрудник"/><TH ch="Магазин"/><TH ch="Смен"/><TH ch="Дней"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="ИТОГО"/></tr></thead>
+          <thead><tr><TH ch="Сотрудник"/><TH ch="Магазин"/><TH ch="Смен"/><TH ch="Дней"/><TH ch="Оклад"/><TH ch="% Выр."/><TH ch="Бонус"/><TH ch="ИТОГО"/><TH ch="🔍 Ревизия"/><TH ch="💵 Касса"/></tr></thead>
           <tbody>{activeE.map((e,i)=>{const p=allParts[i];return(<tr key={e.id} style={{background:i%2===0?C.w:"#fafbfc"}}>
             <TD ch={<div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:26,height:26,borderRadius:"50%",background:avB(e.id),display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:av(e.id)}}>{ini(e)}</div><div><div style={{fontWeight:600,fontSize:12}}>{fullName(e)}</div><div style={{fontSize:10,color:C.mu}}>{pn(e.pos_id)}</div></div></div>}/>
             <TD ch={<span style={{fontSize:11,color:C.md}}>{sn(e.default_store)}</span>}/>
@@ -1508,6 +1810,8 @@ export default function App() {
             <TD ch={p.variable>0?`${fmt(p.variable)} ₸`:"—"} s={{color:C.pu,fontWeight:600}}/>
             <TD ch={p.bonus>0?`+${fmt(p.bonus)} ₸`:"—"} s={{color:p.bonus?C.gn:C.mu}}/>
             <TD ch={`${fmt(p.total)} ₸`} s={{fontWeight:800,fontSize:14,color:C.or}}/>
+            <TD ch={p.revDeduction>0?<span style={{color:C.rd,fontWeight:700}}>−{fmt(p.revDeduction)} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
+            <TD ch={p.cashDiff!==0?<span style={{color:p.cashDiff>0?C.gn:C.rd,fontWeight:700}}>{p.cashDiff>0?`+${fmt(p.cashDiff)}`:`−${fmt(Math.abs(p.cashDiff))}`} ₸</span>:<span style={{color:C.mu}}>—</span>}/>
           </tr>);})}</tbody>
           <tfoot><tr style={{background:C.lt}}>
             <td colSpan={4} style={{padding:"8px 10px",fontWeight:700,fontSize:11,color:C.md,borderTop:`2px solid ${C.bdr}`}}>ИТОГО</td>
@@ -1515,6 +1819,8 @@ export default function App() {
             <td style={{padding:"6px 10px",fontWeight:800,color:C.pu,borderTop:`2px solid ${C.bdr}`,fontSize:13}}>{fmt(grand.variable)} ₸</td>
             <td style={{padding:"6px 10px",fontWeight:800,color:C.gn,borderTop:`2px solid ${C.bdr}`,fontSize:13}}>{fmt(grand.bonus)} ₸</td>
             <td style={{padding:"6px 10px",fontWeight:800,color:C.or,borderTop:`2px solid ${C.bdr}`,fontSize:14}}>{fmt(grand.total)} ₸</td>
+            <td style={{padding:"6px 10px",fontWeight:800,color:C.rd,borderTop:`2px solid ${C.bdr}`,fontSize:13}}>{grand.revDeduction>0?`−${fmt(grand.revDeduction)} ₸`:"—"}</td>
+            <td style={{padding:"6px 10px",fontWeight:800,borderTop:`2px solid ${C.bdr}`,fontSize:13}}>{grand.cashDiff!==0?<span style={{color:grand.cashDiff>0?C.gn:C.rd}}>{grand.cashDiff>0?`+${fmt(grand.cashDiff)}`:`−${fmt(Math.abs(grand.cashDiff))}`} ₸</span>:"—"}</td>
           </tr></tfoot>
         </table>
       </div>
@@ -1665,12 +1971,12 @@ export default function App() {
         {k:"suppliers", l:"🏭 Поставщики", show: showSuppliers},
       ].filter(i=>i.show),
     },
-    ...((role==="owner"||role==="manager") ? [{
+    ...(role==="owner" ? [{
       key: "settings", label: "⚙️ Настройки", color: C.md,
       items: [
         {k:"users",   l:"👥 Пользователи", show: true},
-        {k:"cleanup", l:"🗑 Очистка данных",show: role==="owner"},
-      ].filter(i=>i.show),
+        {k:"cleanup", l:"🗑 Очистка данных",show: true},
+      ],
     }] : []),
   ].filter(g=>g.items.length>0);
 
@@ -2185,7 +2491,7 @@ export default function App() {
                 ["admin",     "📋 Администратор",C.pu,C.puBg,C.puBd],
                 ["buyer",     "📦 Закупщик",    C.gn,C.gnBg,C.gnBd],
                 ["accountant","💰 Бухгалтер",   C.am,C.amBg,C.amBd],
-              ] as any[]).filter(([rv])=>role==="owner"||(rv!=="owner"&&rv!=="manager")).map(([rv,rl,rc,rbg,rbd])=>(
+              ] as any[]).map(([rv,rl,rc,rbg,rbd])=>(
                 <button key={rv} onClick={()=>setRole(rv)} style={{flex:1,padding:"7px 2px",borderRadius:8,fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
                   background:u.role===rv?rbg:C.lt, border:`2px solid ${u.role===rv?rbd:C.bdr}`, color:u.role===rv?rc:C.mu}}>
                   {rl}
