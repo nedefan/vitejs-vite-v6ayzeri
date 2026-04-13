@@ -1659,6 +1659,7 @@ export default function App() {
     {/* ══ БЛОК РЕВИЗИИ ══ */}
     {(()=>{
       // Используем расчёты из начала renderSrep
+      const canEditRev = role==="owner"||role==="manager";
       const existingRev = revExisting;
       const pct = revPct;
       const actual = revActual;
@@ -1709,23 +1710,30 @@ export default function App() {
           </div>
           <div style={{padding:"14px 16px"}}>
             {/* Форма */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr auto",gap:10,alignItems:"flex-end",marginBottom:14}}>
+            {!canEditRev&&!existingRev?<div style={{background:C.lt,borderRadius:8,padding:"10px 14px",fontSize:11,color:C.mu,marginBottom:14}}>🔒 Ревизия ещё не проводилась</div>:
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr"+(canEditRev?" auto":""),gap:10,alignItems:"flex-end",marginBottom:14}}>
               <div>
                 <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>% ДОПУСТИМЫХ ПОТЕРЬ</div>
-                <input type="number" step="0.1" value={revForm.allowance_pct} onChange={e=>setRevForm({...revForm,allowance_pct:e.target.value})} style={I()}/>
+                {canEditRev
+                  ?<input type="number" step="0.1" value={revForm.allowance_pct} onChange={e=>setRevForm({...revForm,allowance_pct:e.target.value})} style={I()}/>
+                  :<div style={{...I(),background:C.lt,color:C.tx,cursor:"default"}}>{revForm.allowance_pct}%</div>}
               </div>
               <div>
                 <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>ФАКТИЧЕСКАЯ НЕДОСТАЧА (₸)</div>
-                <input type="number" value={revForm.shortage_actual} onChange={e=>setRevForm({...revForm,shortage_actual:e.target.value})} placeholder="0" style={I()}/>
+                {canEditRev
+                  ?<input type="number" value={revForm.shortage_actual} onChange={e=>setRevForm({...revForm,shortage_actual:e.target.value})} placeholder="0" style={I()}/>
+                  :<div style={{...I(),background:C.lt,color:C.tx,cursor:"default"}}>{revForm.shortage_actual||"0"} ₸</div>}
               </div>
               <div>
                 <div style={{fontSize:10,color:C.mu,fontWeight:700,marginBottom:4}}>КОММЕНТАРИЙ</div>
-                <input type="text" value={revForm.note} onChange={e=>setRevForm({...revForm,note:e.target.value})} placeholder="Плановая ревизия..." style={I()}/>
+                {canEditRev
+                  ?<input type="text" value={revForm.note} onChange={e=>setRevForm({...revForm,note:e.target.value})} placeholder="Плановая ревизия..." style={I()}/>
+                  :<div style={{...I(),background:C.lt,color:C.tx,cursor:"default"}}>{revForm.note||"—"}</div>}
               </div>
-              <button onClick={saveRevision} disabled={revSaving} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",opacity:revSaving?0.6:1}}>
+              {canEditRev&&<button onClick={saveRevision} disabled={revSaving} style={{background:"linear-gradient(135deg,#f97316,#ea580c)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",opacity:revSaving?0.6:1}}>
                 {revSaving?"⏳...":existingRev?"💾 Обновить":"💾 Сохранить"}
-              </button>
-            </div>
+              </button>}
+            </div>}
             {/* Итоги расчёта */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:excess>0||actual>0?14:0}}>
               {[
@@ -1757,7 +1765,7 @@ export default function App() {
                       <TD ch={<span style={{fontWeight:600}}>{row.emp?fullName(row.emp):"—"}</span>}/>
                       <TD ch={row.shifts}/>
                       <TD ch={<span style={{color:C.rd,fontWeight:700}}>−{fmt(row.deduction)} ₸</span>}/>
-                      <TD ch={status==="paid"
+                      <TD ch={!canEditRev?<span style={{color:C.mu,fontSize:10}}>—</span>:status==="paid"
                         ?<span style={{background:C.gnBg,border:`1px solid ${C.gnBd}`,color:C.gn,padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:700}}>✅ Наличные</span>
                         :status==="debt"
                         ?<span style={{background:C.rdBg,border:`1px solid ${C.rdBd}`,color:C.rd,padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:700}}>📋 В долг</span>
