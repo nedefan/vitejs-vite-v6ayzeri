@@ -844,7 +844,7 @@ export default function SuppliersModule({sb,stores,appUser}:Props) {
         </div>
       </div>}
       <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-        {canEditPayments&&isOwnerOrManager&&<button onClick={()=>{setPayF({date:today,amount:"",note:""});setPayModal(true);}}
+        {canEditPayments&&(isOwnerOrManager||role==="accountant")&&<button onClick={()=>{setPayF({date:today,amount:"",note:""});setPayModal(true);}}
           style={{background:"linear-gradient(135deg,#16a34a,#15803d)",border:"none",color:"#fff",padding:"7px 14px",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
           + Оплата поставщику
         </button>}
