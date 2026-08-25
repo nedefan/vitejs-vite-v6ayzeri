@@ -9,6 +9,24 @@ const SUPA_URL = "https://mhbeicelkyezgyvjnlkd.supabase.co";
 const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oYmVpY2Vsa3llemd5dmpubGtkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MjI0MTMsImV4cCI6MjA4ODE5ODQxM30.bJAsRm4ZPRAB6mEqCskmE9sx_2J0K8TMNNIo8J2uow4";
 const sb = createClient(SUPA_URL, SUPA_KEY);
 
+// ── Постраничная загрузка: PostgREST по умолчанию отдаёт максимум 1000 строк.
+//    Таблицы shifts и revenue давно переросли этот лимит, из-за чего
+//    самые свежие/старые дни просто не приходили с сервера.
+async function fetchAll(table: string) {
+  const PAGE = 1000;
+  let from = 0;
+  const out: any[] = [];
+  for (;;) {
+    const { data, error } = await sb.from(table).select("*").order("id", { ascending: true }).range(from, from + PAGE - 1);
+    if (error) throw error;
+    const chunk = data || [];
+    out.push(...chunk);
+    if (chunk.length < PAGE) break;
+    from += PAGE;
+  }
+  return out;
+}
+
 // ═══ РОЛИ ═══
 // owner  — всё, все магазины
 // manager — только свой магазин: ввод, выручка, отчёт по магазину
@@ -621,8 +639,8 @@ export default function App() {
         sb.from("stores").select("*").order("id"),
         sb.from("positions").select("*").order("id"),
         sb.from("employees").select("*").order("id"),
-        sb.from("shifts").select("*").order("date", {ascending:false}),
-        sb.from("revenue").select("*"),
+        fetchAll("shifts"),
+        fetchAll("revenue"),
         sb.from("schedule").select("*"),
         sb.from("debts").select("*").order("id"),
         sb.from("debt_moves").select("*").order("date", {ascending:false}),
@@ -633,8 +651,9 @@ export default function App() {
       const sts = stRes.data || [];
       const poss = posRes.data || [];
       const empsData = empRes.data || [];
-      const shData = shRes.data || [];
-      const revData = revRes.data || [];
+      const shData = (Array.isArray(shRes) ? shRes : []).slice()
+        .sort((a: any, b: any) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+      const revData = Array.isArray(revRes) ? revRes : [];
       const schedData = schedRes.data || [];
 
       setStores(sts);
@@ -994,17 +1013,33 @@ export default function App() {
 
   // ── ВЫРУЧКА ───────────────────────────────────────────────────────────────
   async function saveRev() {
-    if (!revInput) return;
+    if (revInput === "" || revInput === null || revInput === undefined) return;
+    const amount = Number(revInput);
+    if (!isFinite(amount) || amount < 0) { alert("Некорректная сумма выручки"); return; }
     setSaving(true);
-    const existing = (revenue[store]||{})[date];
-    if (existing !== undefined) {
-      await sb.from("revenue").update({amount:+revInput}).eq("store_id",store).eq("date",date);
-    } else {
-      await sb.from("revenue").insert({store_id:store, date, amount:+revInput});
+    try {
+      // Наличие записи проверяем в БАЗЕ, а не в локальном стейте:
+      // стейт мог не содержать строку (лимит выдачи), и тогда insert падал
+      // на уникальном индексе (store_id, date), а ошибка молча терялась.
+      const { data: found, error: selErr } = await sb
+        .from("revenue").select("id").eq("store_id", store).eq("date", date).limit(1);
+      if (selErr) throw selErr;
+
+      if (found && found.length > 0) {
+        const { error } = await sb.from("revenue").update({ amount }).eq("id", found[0].id);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("revenue").insert({ store_id: store, date, amount });
+        if (error) throw error;
+      }
+
+      setRevenue(prev => ({ ...prev, [store]: { ...(prev[store] || {}), [date]: amount } }));
+      setRevEditing(false); setRevInput("");
+    } catch (e: any) {
+      alert("Не удалось сохранить выручку: " + (e?.message || String(e)));
+      console.error("saveRev error", e);
     }
-    setRevenue(prev => ({...prev, [store]:{...(prev[store]||{}), [date]:+revInput}}));
     setSaving(false);
-    setRevEditing(false); setRevInput("");
   }
 
   // ── РАСПИСАНИЕ ────────────────────────────────────────────────────────────
